@@ -1,0 +1,30 @@
+# 依赖与构建产物
+node_modules/
+dist/
+app/dist/
+backend/dist/
+
+# 环境变量与密钥（绝不入库）
+.env
+.env.*
+*.env
+!env.prod.example
+
+# 运行时数据（生产用卷持久化，不入库）
+backend/uploads/
+
+# 厂内敏感资料（真实督查通报原件，含内部信息，不上传公开仓库）
+厂督察通报/
+
+# 生成物与临时资产（可由脚本重新生成）
+*.pdf
+intro-assets/
+pdf-qa/
+
+# 大体积安装包
+*.msi
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+*.log

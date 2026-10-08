@@ -1,0 +1,54 @@
+# ============================================================
+# 生产环境编排：app（前后端一体）+ db（PostgreSQL）
+# 用法：docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+# ============================================================
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: wsms-postgres-prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-wsms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env.prod 中设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-workshop_safety}
+    volumes:
+      - wsms-pgdata:/var/lib/postgresql/data
+    # 数据库不暴露到宿主机/公网，仅容器内网可达
+    networks:
+      - wsms-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wsms-app:latest
+    container_name: wsms-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # 应用容器通过内网服务名访问数据库
+      DATABASE_URL: postgresql://${POSTGRES_USER:-wsms}:${POSTGRES_PASSWORD}@${POSTGRES_HOST:-db}:5432/${POSTGRES_DB:-workshop_safety}
+      PORT: 3100
+      JWT_SECRET: ${JWT_SECRET:?请在 .env.prod 中设置 JWT_SECRET}
+    ports:
+      # 服务器上唯一需要对外（或经反向代理）暴露的端口
+      - "${APP_PORT:-3100}:3100"
+    volumes:
+      - wsms-uploads:/app/backend/uploads
+    networks:
+      - wsms-internal
+
+networks:
+  wsms-internal:
+    driver: bridge
+
+volumes:
+  wsms-pgdata:
+  wsms-uploads:

@@ -1,0 +1,133 @@
+// 车间安全管理系统 · 数据模型
+// 与前端 src/types/index.ts 对齐；枚举值用小写字符串，保持 API 与前端一致
+
+generator client {
+  provider = "prisma-client-js"
+  // native 覆盖开发机（Windows）；linux-musl-openssl-3.0.x 覆盖 Docker 生产镜像（node:20-alpine）
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// 隐患问题（核心实体）
+model Issue {
+  id          String    @id @default(cuid())
+  title       String
+  description String    @default("")
+  locationId  String?
+  categoryId  String?
+  tagIds      String[]  @default([])
+  riskLevel   String    @default("general") // general | major | critical
+  status      String    @default("pending") // pending | fixing | review | closed
+  /// 管理范围：managed=成品车间（走整改闭环/统计/提醒），reference=其他车间（仅存档参考）
+  scope       String    @default("managed")
+  source      String    @default("manual") // manual | pptx | docx | xlsx
+  sourceFile  String?
+  reporter    String    @default("")
+  assignee    String?
+  foundAt     DateTime  @default(now())
+  deadline    DateTime?
+  closedAt    DateTime?
+  fixNote     String?
+  /// 现场/整改照片路径列表（/uploads/xxx）
+  photos      String[]  @default([])
+  /// 防复发重复检查：间隔天数（默认 7，可编辑）
+  recheckIntervalDays Int     @default(7)
+  /// 要求复查次数（默认至少 3 次）
+  recheckRequired    Int     @default(3)
+  /// 已完成复查的时间 ISO 列表
+  rechecks           String[] @default([])
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("issues")
+}
+
+/// 参考件问题标注：评估其他车间问题对成品车间的参考意义（一隐患一条）
+model IssueAnnotation {
+  id      String @id @default(cuid())
+  /// 对应隐患 id（scope=reference 的参考件；无 FK，随隐患删除由业务层清理）
+  issueId String @unique
+  /// 参考意义：high=需严格注意 | medium=对照自查 | low=一般了解
+  relevance  String @default("medium")
+  /// 成品车间的相似点（哪个区域/设备/作业与此问题类似）
+  similarity String @default("")
+  /// 需要严格注意的事项
+  caution    String @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("issue_annotations")
+}
+
+/// 标签（分维度组）
+model Tag {
+  id      String  @id @default(cuid())
+  name    String
+  group   String // category | location | custom
+  color   String  @default("#007AFF")
+  builtin Boolean @default(false)
+
+  @@unique([name, group])
+  @@map("tags")
+}
+
+/// 周期检查计划
+model InspectionPlan {
+  id                  String   @id @default(cuid())
+  name                String
+  scope               String   @default("")
+  frequency           String // daily | weekly | monthly | quarterly
+  nextRunAt           DateTime
+  checklist           String[] @default([])
+  remindBeforeMinutes Int      @default(60)
+  enabled             Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  executions          PlanExecution[]
+
+  @@map("inspection_plans")
+}
+
+/// 检查计划执行台账
+model PlanExecution {
+  id        String   @id @default(cuid())
+  planId    String
+  plan      InspectionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  executor  String   @default("")
+  note      String   @default("")
+  /// 本次检查关联发现的隐患 id 列表
+  issueIds  String[] @default([])
+  executedAt DateTime @default(now())
+
+  @@map("plan_executions")
+}
+
+/// 系统用户
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  displayName  String   @default("")
+  role         String   @default("safety_officer") // admin | safety_officer | viewer
+  createdAt    DateTime @default(now())
+
+  @@map("users")
+}
+
+/// 提醒记录
+model Reminder {
+  id        String   @id @default(cuid())
+  type      String // plan | overdue | review
+  refId     String
+  title     String
+  triggerAt DateTime
+  read      Boolean  @default(false)
+  done      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@unique([type, refId])
+  @@map("reminders")
+}

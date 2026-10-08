@@ -1,0 +1,30 @@
+import type { IssueSource, IssueStatus, RiskLevel } from '@/types'
+import { cn } from '@/lib/utils'
+
+export const RISK_LABEL: Record<RiskLevel, string> = { general: '一般', major: '较大', critical: '重大' }
+export const RISK_COLOR: Record<RiskLevel, string> = {
+  general: 'bg-[#34C759]/12 text-[#248A3D]',
+  major: 'bg-[#FF9500]/12 text-[#C93400]',
+  critical: 'bg-[#FF3B30]/12 text-[#D70015]',
+}
+
+export const STATUS_LABEL: Record<IssueStatus, string> = { pending: '待整改', fixing: '整改中', review: '待复查', closed: '已闭环' }
+export const STATUS_COLOR: Record<IssueStatus, string> = {
+  pending: 'bg-neutral-500/10 text-neutral-600',
+  fixing: 'bg-[#007AFF]/12 text-[#007AFF]',
+  review: 'bg-[#AF52DE]/12 text-[#8944AB]',
+  closed: 'bg-[#34C759]/12 text-[#248A3D]',
+}
+
+export const SOURCE_LABEL: Record<IssueSource, string> = { manual: '手动录入', pptx: 'PPT 导入', docx: '文档导入', xlsx: '表格导入' }
+
+export function RiskBadge({ level }: { level: RiskLevel }) {
+  return <span className={cn('px-2 py-0.5 rounded-md text-[12px] font-medium', RISK_COLOR[level])}>{RISK_LABEL[level]}</span>
+}
+
+export function StatusBadge({ status, overdue }: { status: IssueStatus; overdue?: boolean }) {
+  if (overdue) {
+    return <span className="px-2 py-0.5 rounded-md text-[12px] font-medium bg-[#FF3B30]/12 text-[#D70015]">已逾期</span>
+  }
+  return <span className={cn('px-2 py-0.5 rounded-md text-[12px] font-medium', STATUS_COLOR[status])}>{STATUS_LABEL[status]}</span>
+}
