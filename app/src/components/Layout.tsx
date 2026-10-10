@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router'
 import {
-  LayoutDashboard, FilePlus2, ClipboardList, Flag, Tags, BarChart3, CalendarClock, Bell, ShieldCheck, LogOut, Menu, X,
+  LayoutDashboard, FilePlus2, ClipboardList, Flag, Tags, BarChart3, CalendarClock, Bell, ShieldCheck, LogOut, Menu, X, Users, BookOpen,
 } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { cn } from '@/lib/utils'
+import { getCurrentUser, logout } from '@/lib/auth'
 import ChangePassword from './ChangePassword'
 
 const NAV = [
@@ -21,6 +22,7 @@ export default function Layout() {
   const { reminders, offline } = useStore()
   const unread = reminders.filter((r) => !r.read && !r.done).length
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const isAdmin = getCurrentUser()?.role === 'admin'
 
   const navItems = (onNavigate?: () => void) => (
     <>
@@ -41,6 +43,34 @@ export default function Layout() {
           {label}
         </NavLink>
       ))}
+      {isAdmin && (
+        <NavLink
+          to="/users"
+          onClick={onNavigate}
+          className={({ isActive }) =>
+            cn(
+              'flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-[14px] transition-colors',
+              isActive ? 'bg-[#007AFF]/10 text-[#007AFF] font-medium' : 'text-neutral-600 hover:bg-neutral-100',
+            )
+          }
+        >
+          <Users className="w-4 h-4" strokeWidth={2} />
+          用户管理
+        </NavLink>
+      )}
+      <NavLink
+        to="/help"
+        onClick={onNavigate}
+        className={({ isActive }) =>
+          cn(
+            'flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-[14px] transition-colors',
+            isActive ? 'bg-[#007AFF]/10 text-[#007AFF] font-medium' : 'text-neutral-600 hover:bg-neutral-100',
+          )
+        }
+      >
+        <BookOpen className="w-4 h-4" strokeWidth={2} />
+        使用手册
+      </NavLink>
     </>
   )
 
@@ -96,10 +126,7 @@ export default function Layout() {
               </NavLink>
               <ChangePassword className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-[14px] text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 transition-colors" />
               <button
-                onClick={() => {
-                  localStorage.removeItem('wsms-token')
-                  window.location.reload()
-                }}
+                onClick={logout}
                 className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-[14px] text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 transition-colors"
               >
                 <LogOut className="w-4 h-4" strokeWidth={2} />
@@ -136,10 +163,7 @@ export default function Layout() {
         </NavLink>
         <ChangePassword />
         <button
-          onClick={() => {
-            localStorage.removeItem('wsms-token')
-            window.location.reload()
-          }}
+          onClick={logout}
           className="mx-3 mb-4 flex items-center gap-2.5 px-3 py-2 rounded-lg text-[14px] text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 transition-colors"
         >
           <LogOut className="w-4 h-4" strokeWidth={2} />

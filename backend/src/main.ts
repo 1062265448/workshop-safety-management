@@ -1,12 +1,13 @@
 import 'dotenv/config'
 import { NestFactory } from '@nestjs/core'
-import { ValidationPipe } from '@nestjs/common'
+import { RequestMethod, ValidationPipe } from '@nestjs/common'
 import type { NestExpressApplication } from '@nestjs/platform-express'
 import { AppModule } from './app.module'
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule)
-  app.setGlobalPrefix('api')
+  // 全局 /api 前缀；/uploads/:file 照片下载除外（控制器在 /api 之外，供 <img> 同源访问）
+  app.setGlobalPrefix('api', { exclude: [{ path: 'uploads/:file', method: RequestMethod.GET }] })
   // 反向代理（Caddy/Nginx）后获取真实访客 IP，登录限流按真实 IP 计数
   app.set('trust proxy', true)
   // 单端口同源架构（后端托管前端），无需放开跨域；公网部署杜绝任意来源调用 API

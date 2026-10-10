@@ -11,6 +11,8 @@ export default defineConfig({
     port: 7100,
     proxy: {
       '/api': 'http://localhost:3100',
+      // 开发模式下照片经 Vite 代理到后端（生产模式由后端直接托管）
+      '/uploads': 'http://localhost:3100',
     },
   },
   resolve: {

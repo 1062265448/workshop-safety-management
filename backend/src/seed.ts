@@ -41,19 +41,27 @@ async function main() {
     console.log('seeded inspection plans')
   }
 
-  // 管理员账号（首次登录后请立即改密码）
+  // 管理员账号：仅在没有用户时创建。密码不再硬编码——
+  // 优先取环境变量 ADMIN_USERNAME / ADMIN_PASSWORD；未配置则生成强随机口令并打印一次
   const userCount = await prisma.user.count()
   if (userCount === 0) {
     const bcrypt = await import('bcryptjs')
+    const crypto = await import('crypto')
+    const username = (process.env.ADMIN_USERNAME ?? 'wsms_admin').trim()
+    let password = process.env.ADMIN_PASSWORD
+    if (!password) {
+      password = crypto.randomBytes(12).toString('base64url')
+      console.log(`[首次部署] 已生成随机管理员密码（仅此一次显示，请立即记录并登录后修改）：${password}`)
+    }
     await prisma.user.create({
       data: {
-        username: 'admin',
-        passwordHash: await bcrypt.hash('Wsms@2026', 10),
+        username,
+        passwordHash: await bcrypt.hash(password, 10),
         displayName: '安全管理员',
         role: 'admin',
       },
     })
-    console.log('seeded admin user (admin / Wsms@2026)')
+    console.log(`seeded admin user (${username})`)
   }
 
   console.log('seed done')

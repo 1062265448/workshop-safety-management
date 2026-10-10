@@ -21,8 +21,9 @@ export default function Login({ onLogin }: { onLogin: (token: string) => void })
         const body = await res.json().catch(() => null)
         throw new Error(body?.message ?? '登录失败')
       }
-      const { token } = await res.json()
+      const { token, user } = await res.json()
       localStorage.setItem('wsms-token', token)
+      localStorage.setItem('wsms-user', JSON.stringify(user))
       onLogin(token)
     } catch (e) {
       setError(e instanceof Error ? e.message : '登录失败')
@@ -64,7 +65,7 @@ export default function Login({ onLogin }: { onLogin: (token: string) => void })
             登录
           </button>
         </div>
-        <p className="text-center text-[12px] text-neutral-400 mt-4">初始账号 admin / Wsms@2026，首次登录后请修改密码</p>
+        <p className="text-center text-[12px] text-neutral-400 mt-4">请使用管理员分配的账号登录 · 忘记密码请联系管理员重置</p>
       </div>
     </div>
   )

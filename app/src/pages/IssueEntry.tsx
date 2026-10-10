@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { FileUp, Loader2, CheckSquare, Square, ClipboardCheck, ImagePlus, X } from 'lucide-react'
+import PageHelpLink from '@/components/PageHelpLink'
 import { uploadPhotos, useStore } from '@/lib/store'
 import { isManagedWorkshop } from '@/lib/config'
 import { detectSource, parseFile, type SkippedPage } from '@/lib/import/parsers'
@@ -179,7 +180,7 @@ export default function IssueEntry() {
     <div className="max-w-3xl space-y-6">
       <header>
         <h1 className="text-2xl font-semibold">问题录入</h1>
-        <p className="text-sm text-neutral-500 mt-1">手动登记隐患，或从 PPT / Word / Excel 批量导入</p>
+        <p className="text-sm text-neutral-500 mt-1">手动登记隐患，或从 PPT / Word / Excel 批量导入 · <PageHelpLink /></p>
       </header>
 
       {/* 页签 */}

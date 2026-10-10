@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common'
+import { Body, ConflictException, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common'
 import { Injectable, NotFoundException } from '@nestjs/common'
 import { Module } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
@@ -23,8 +23,20 @@ export class TagsService {
     })
   }
 
+  /** (name, group) 唯一约束冲突转为 409，避免裸 500 泄漏内部错误 */
+  private async guardUnique<T>(op: () => Promise<T>, name: string): Promise<T> {
+    try {
+      return await op()
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException(`标签「${name}」在该维度组已存在`)
+      }
+      throw e
+    }
+  }
+
   create(body: Record<string, unknown>) {
-    return this.prisma.tag.create({ data: pick(body) })
+    return this.guardUnique(() => this.prisma.tag.create({ data: pick(body) }), String(body.name ?? ''))
   }
 
   /** 幂等建档：按 名称+维度组 查找，不存在则创建（导入解析自动建档用） */
@@ -42,7 +54,10 @@ export class TagsService {
   }
 
   update(id: string, body: Record<string, unknown>) {
-    return this.prisma.tag.update({ where: { id }, data: pick(body) })
+    return this.guardUnique(
+      () => this.prisma.tag.update({ where: { id }, data: pick(body) }),
+      String(body.name ?? ''),
+    )
   }
 
   /** 内置标签不可删除；删除时清理问题上的引用 */

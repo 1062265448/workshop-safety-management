@@ -35,13 +35,15 @@ npm run dev
 ## 登录鉴权
 
 - JWT 认证：后端全局守卫，除 `POST /api/auth/login` 外所有 API 需携带 `Authorization: Bearer <token>`，token 有效期 7 天
-- 初始账号：`admin` / `Wsms@2026`（首次登录后请用 `POST /api/auth/change-password` 改密）
+- 管理员账号：首次运行 `node dist/seed.js` 时自动创建——用户名取环境变量 `ADMIN_USERNAME`（默认 `wsms_admin`），密码取 `ADMIN_PASSWORD`；两者都未配置时生成强随机密码并打印一次到控制台（请立即记录并登录后修改）。系统中不存在任何内置默认口令
 - 密钥在 `backend/.env` 的 `JWT_SECRET`，生产环境务必更换
 - 用户表 `users`（用户名 / 密码 bcrypt 哈希 / 角色 admin|safety_officer|viewer）
 
-## 局域网访问（其他电脑打开本系统）
+## 开机自启（已配置）
 
-生产模式下单端口运行：后端托管前端打包产物，整站只有一个端口 3100。
+开机后无需任何手动操作：启动文件夹中的 `WSMS-AutoStart.vbs` 会静默调用根目录 `wsms-autostart.bat`，依序自动完成——①确保 Docker Desktop 运行 → ②拉起数据库容器（wsms-postgres）→ ③启动后端（3100，托管前端）→ ④启动 Cloudflare Tunnel（外网恢复）。每一步都有守卫判断，已在运行则跳过，不会重复拉起。
+
+注意：自启后会留下两个最小化的命令行窗口——`WSMS-Backend`（后端）和 `WSMS-Tunnel`（隧道），请勿关闭；其他操作均无需接触。
 
 **日常一键重启**：双击根目录 `重启服务.bat`——自动停掉 3100 端口旧进程 → 拉起数据库容器 → 新窗口启动后端（前端为静态产物随后端一并生效，无需单独重启；若改了前端代码需先 `cd app && npm run build` 再双击）。
 
@@ -75,7 +77,7 @@ netsh advfirewall firewall add rule name="WSMS-3100" dir=in action=allow protoco
 5. **手机/其他电脑**：装 Tailscale 客户端登录同一账号，浏览器访问 `http://100.x.x.x:3100`
 6. 建议：Tailscale 管理后台（login.tailscale.com）→ Machines → 本机 → **Disable key expiry**（否则 180 天要重登）；开启 MagicDNS 后可直接用机器名访问
 
-备选：Cloudflare Tunnel（cloudflared 出站连接 + Access 身份认证），适合访问者不便装客户端的场景。
+当前生产环境已使用 **Cloudflare Tunnel**（隧道 `jcn-server`），公网地址：`https://wsms.jcngcp.xyz`（出站连接，无需公网 IP/端口映射，HTTPS 由 Cloudflare 提供；隧道进程由开机自启脚本维护）。
 
 ## 服务器部署（生产 · Docker 一体化）
 

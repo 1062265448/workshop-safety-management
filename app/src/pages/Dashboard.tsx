@@ -29,6 +29,32 @@ export default function Dashboard() {
         <p className="text-sm text-neutral-500 mt-1">隐患排查治理闭环的当前状态</p>
       </header>
 
+      {/* 新手上路：快速引导（可点右上角关闭，仅本地记忆） */}
+      {!localStorage.getItem('wsms-hide-guide') && (
+        <section className="bg-gradient-to-br from-[#007AFF]/5 to-transparent border border-[#007AFF]/15 rounded-2xl p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-[15px] font-semibold text-[#007AFF]">新手上路 · 三步闭环</h2>
+              <ol className="mt-2.5 space-y-1.5 text-[13px] text-neutral-600">
+                <li><strong className="text-neutral-900">① 登记</strong>：问题录入（手动 / 通报导入）→ 确认入库</li>
+                <li><strong className="text-neutral-900">② 整改</strong>：问题库点蓝色按钮推进 待整改 → 整改中 → 待复查 → 已闭环</li>
+                <li><strong className="text-neutral-900">③ 防复发</strong>：闭环后按 7 天间隔做满 3 次复查，到点自动提醒</li>
+              </ol>
+              <Link to="/help" className="inline-flex items-center gap-1 mt-3 text-[13px] text-[#007AFF] font-medium">
+                查看完整使用手册 <ArrowRight className="w-3.5 h-3.5" />
+              </Link>
+            </div>
+            <button
+              onClick={(e) => { localStorage.setItem('wsms-hide-guide', '1'); e.currentTarget.closest('section')?.remove() }}
+              className="text-neutral-300 hover:text-neutral-500 text-lg leading-none shrink-0"
+              title="关闭引导"
+            >
+              ×
+            </button>
+          </div>
+        </section>
+      )}
+
       {/* 指标卡 */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {cards.map(({ label, value, icon: Icon, color, bg }) => (

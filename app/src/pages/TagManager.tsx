@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { useStore } from '@/lib/store'
+import PageHelpLink from '@/components/PageHelpLink'
 import type { TagGroup } from '@/types'
 
 const GROUP_META: Array<{ key: TagGroup; label: string; hint: string }> = [
@@ -32,7 +33,7 @@ export default function TagManager() {
     <div className="max-w-4xl space-y-6">
       <header>
         <h1 className="text-2xl font-semibold">标签管理</h1>
-        <p className="text-sm text-neutral-500 mt-1">按维度组维护标签体系，内置标签不可删除</p>
+        <p className="text-sm text-neutral-500 mt-1">按维度组维护标签体系，内置标签不可删除 · <PageHelpLink /></p>
       </header>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

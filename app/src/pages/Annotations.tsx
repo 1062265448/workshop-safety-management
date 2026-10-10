@@ -3,6 +3,7 @@ import { Flag, Loader2, Check } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { fmtDate } from '@/lib/format'
 import { RISK_LABEL } from '@/components/badges'
+import PageHelpLink from '@/components/PageHelpLink'
 import type { IssueAnnotation, RelevanceLevel, SafetyIssue } from '@/types'
 
 // ─────────────────────────────────────────────────────────────
@@ -58,7 +59,7 @@ export default function Annotations() {
       <header>
         <h1 className="text-2xl font-semibold">参考标注</h1>
         <p className="text-sm text-neutral-500 mt-1">
-          评估其他车间问题对成品车间的参考意义：哪里相似、需要严格注意什么
+          评估其他车间问题对成品车间的参考意义：哪里相似、需要严格注意什么 · <PageHelpLink />
         </p>
         <p className="text-[13px] text-neutral-400 mt-1.5">
           已标注 {doneCount} / {refs.length} 条{highCount > 0 && ` · `}

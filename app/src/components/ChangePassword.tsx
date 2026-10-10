@@ -18,7 +18,9 @@ export default function ChangePassword({ className }: { className?: string }) {
   }
 
   const submit = async () => {
-    if (newPassword.length < 6) return setMsg({ ok: false, text: '新密码至少 6 位' })
+    if (newPassword.length < 8 || !/[a-zA-Z]/.test(newPassword) || !/\d/.test(newPassword)) {
+      return setMsg({ ok: false, text: '新密码至少 8 位，且需同时包含字母和数字' })
+    }
     if (newPassword !== confirm) return setMsg({ ok: false, text: '两次输入的新密码不一致' })
     setLoading(true)
     setMsg(null)
@@ -67,7 +69,7 @@ export default function ChangePassword({ className }: { className?: string }) {
             </div>
             <input className={inputCls} type="password" placeholder="原密码" value={oldPassword}
               onChange={(e) => setOldPassword(e.target.value)} autoFocus />
-            <input className={inputCls} type="password" placeholder="新密码（至少 6 位）" value={newPassword}
+            <input className={inputCls} type="password" placeholder="新密码（≥8 位，含字母和数字）" value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)} />
             <input className={inputCls} type="password" placeholder="确认新密码" value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
