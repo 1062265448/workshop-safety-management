@@ -4,7 +4,7 @@ import { FileUp, Loader2, CheckSquare, Square, ClipboardCheck, ImagePlus, X } fr
 import PageHelpLink from '@/components/PageHelpLink'
 import { uploadPhotos, useStore } from '@/lib/store'
 import { isManagedWorkshop } from '@/lib/config'
-import { detectSource, parseFile, type SkippedPage } from '@/lib/import/parsers'
+import { detectSource, parseFileOffthread, type SkippedPage } from '@/lib/import/parsers'
 import { matchReview } from '@/lib/import/matchReview'
 import { RISK_LABEL } from '@/components/badges'
 import type { IssueDraft, IssueSource, ReviewDraft, RiskLevel } from '@/types'
@@ -61,6 +61,7 @@ export default function IssueEntry() {
   // ── 文件导入（暂存区模式） ──
   const fileRef = useRef<HTMLInputElement>(null)
   const [parsing, setParsing] = useState(false)
+  const [parseStage, setParseStage] = useState('')
   const [importing, setImporting] = useState(false)
   const [sourceFile, setSourceFile] = useState<{ name: string; source: IssueSource } | null>(null)
   const [drafts, setDrafts] = useState<IssueDraft[]>([])
@@ -75,13 +76,18 @@ export default function IssueEntry() {
     const source = detectSource(file.name)
     if (!source) return
     setParsing(true)
+    setParseStage('读取文件中…')
     setParseError('')
     setDrafts([])
     setReviews([])
     setSkipped([])
     setSourceFile(null)
     try {
-      const { drafts: parsed, reviews: parsedReviews, skipped: parsedSkipped } = await parseFile(file)
+      // 解析在 Web Worker 后台线程执行：大文件解析期间页面不卡死、进度实时可见
+      const { drafts: parsed, reviews: parsedReviews, skipped: parsedSkipped } = await parseFileOffthread(
+        file,
+        (done, total) => setParseStage(`识别页面 ${done}/${total}…`),
+      )
       // 自动建档：猜测的车间/类型名与标签库匹配，没有则幂等创建后关联
       const withTags = await Promise.all(
         parsed.map(async (d) => ({
@@ -290,7 +296,7 @@ export default function IssueEntry() {
             className="w-full border-2 border-dashed border-neutral-200 rounded-2xl py-10 flex flex-col items-center gap-2 text-neutral-500 hover:border-[#007AFF]/50 hover:text-[#007AFF] transition-colors"
           >
             {parsing ? <Loader2 className="w-6 h-6 animate-spin" /> : <FileUp className="w-6 h-6" />}
-            <span className="text-[14px]">{parsing ? '解析中…' : '点击选择 PPT / Word / Excel 文件'}</span>
+            <span className="text-[14px]">{parsing ? `${parseStage || '解析中…'}（后台解析，页面可正常操作）` : '点击选择 PPT / Word / Excel 文件'}</span>
             <span className="text-[12px] text-neutral-400">解析结果进入暂存区，确认后才入库</span>
           </button>
           <input

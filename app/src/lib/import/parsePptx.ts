@@ -10,22 +10,21 @@ import type { IssueDraft, ReviewDraft, RiskLevel } from '@/types'
 // 复查页（"复查厂安全督查通报…经查，车间整改核销属实"）解析为核销记录
 // ─────────────────────────────────────────────────────────────
 
-const A_NS = 'http://schemas.openxmlformats.org/drawingml/2006/main'
-
 /** 可作为照片的图片扩展名（emf/wmf 等矢量图浏览器无法展示，跳过） */
 const PHOTO_EXT = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'])
 /** 小于该体积的多半是图标/Logo，不作为现场照片 */
 const MIN_PHOTO_BYTES = 8 * 1024
 
-/** 读取图片自然尺寸（加载失败返回 null） */
-function imageDims(file: File): Promise<{ w: number; h: number } | null> {
-  return new Promise((resolve) => {
-    const url = URL.createObjectURL(file)
-    const img = new Image()
-    img.onload = () => { URL.revokeObjectURL(url); resolve({ w: img.naturalWidth, h: img.naturalHeight }) }
-    img.onerror = () => { URL.revokeObjectURL(url); resolve(null) }
-    img.src = url
-  })
+/** 读取图片自然尺寸（加载失败返回 null）。用 createImageBitmap 而非 Image——Web Worker 中也可用 */
+async function imageDims(file: File): Promise<{ w: number; h: number } | null> {
+  try {
+    const bmp = await createImageBitmap(file)
+    const dims = { w: bmp.width, h: bmp.height }
+    bmp.close()
+    return dims
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -39,11 +38,12 @@ async function slidePhotos(zip: JSZip, slideName: string, slideXml: string): Pro
   if (!relsFile) return []
 
   const relsXml = await relsFile.async('string')
-  const relsDoc = new DOMParser().parseFromString(relsXml, 'application/xml')
+  // 纯正则解析 .rels（Web Worker 无 DOMParser）：提取 Id / Target 属性对
   const targetByRid = new Map<string, string>()
-  for (const rel of Array.from(relsDoc.getElementsByTagName('Relationship'))) {
-    const id = rel.getAttribute('Id') ?? ''
-    const target = rel.getAttribute('Target') ?? ''
+  for (const m of relsXml.matchAll(/<Relationship\b[^>]*>/g)) {
+    const tag = m[0]
+    const id = tag.match(/\bId="([^"]*)"/)?.[1] ?? ''
+    const target = tag.match(/\bTarget="([^"]*)"/)?.[1] ?? ''
     if (id && target.includes('/media/')) targetByRid.set(id, target)
   }
 
@@ -130,16 +130,24 @@ function cleanParagraph(s: string): string {
     .trim()
 }
 
-/** 从单页 XML 提取段落文本（同一段落内的 run 直接拼接，段落间换行） */
+/** 从单页 XML 提取段落文本（同一段落内的 run 直接拼接，段落间换行）。
+ *  纯正则实现：Web Worker 中没有 DOMParser，而 <a:p>/<a:t> 结构用正则提取足够可靠 */
 function slideParagraphs(xml: string): string[] {
-  const doc = new DOMParser().parseFromString(xml, 'application/xml')
-  const paras = Array.from(doc.getElementsByTagNameNS(A_NS, 'p'))
+  const unescape = (s: string) =>
+    s
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+      .replace(/&amp;/g, '&')
+  const paras: string[] = []
+  for (const pm of xml.matchAll(/<a:p\b[^>]*>([\s\S]*?)<\/a:p>/g)) {
+    const runs = Array.from(pm[1].matchAll(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g), (m) => unescape(m[1]))
+    const text = cleanParagraph(runs.join(''))
+    if (text) paras.push(text)
+  }
   return paras
-    .map((p) => {
-      const runs = Array.from(p.getElementsByTagNameNS(A_NS, 't'))
-      return cleanParagraph(runs.map((r) => r.textContent ?? '').join(''))
-    })
-    .filter(Boolean)
 }
 
 /** 标题候选：页末图片说明短句（短、无句号、含否定词更像问题描述） */
@@ -210,7 +218,10 @@ export interface PptxParseResult {
   skipped: SkippedPage[]
 }
 
-export async function parsePptx(file: File): Promise<PptxParseResult> {
+export async function parsePptx(
+  file: File,
+  onProgress?: (done: number, total: number) => void,
+): Promise<PptxParseResult> {
   const zip = await JSZip.loadAsync(file)
   const slideNames = Object.keys(zip.files)
     .filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))
@@ -222,7 +233,9 @@ export async function parsePptx(file: File): Promise<PptxParseResult> {
   const reviews: ReviewDraft[] = []
   const skipped: SkippedPage[] = []
 
+  let done = 0
   for (const name of slideNames) {
+    onProgress?.(++done, slideNames.length)
     const xml = await zip.file(name)!.async('string')
     const paras = slideParagraphs(xml)
     const body = paras.join('\n')

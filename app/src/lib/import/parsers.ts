@@ -26,14 +26,14 @@ export function detectSource(fileName: string): IssueSource | null {
   return null
 }
 
-export async function parseFile(file: File): Promise<ParseResult> {
+export async function parseFile(file: File, onProgress?: (done: number, total: number) => void): Promise<ParseResult> {
   const source = detectSource(file.name)
   if (!source) throw new Error(`不支持的文件格式：${file.name}`)
 
   let result: ParseResult = { drafts: [], reviews: [], skipped: [] }
   switch (source) {
     case 'pptx':
-      result = await parsePptx(file)
+      result = await parsePptx(file, onProgress)
       break
     case 'docx':
       result = { drafts: await parseDocx(file), reviews: [], skipped: [] }
@@ -47,4 +47,40 @@ export async function parseFile(file: File): Promise<ParseResult> {
     throw new Error('未能从文件中识别出隐患问题或复查核销记录（仅支持含"不符合《…》/存在…风险"句式的通报页或规范台账表）')
   }
   return result
+}
+
+/**
+ * 在 Web Worker 后台线程中解析（带逐页进度回调），主线程不被阻塞；
+ * Worker 不可用时回退为当前线程解析。
+ */
+export function parseFileOffthread(
+  file: File,
+  onProgress?: (done: number, total: number) => void,
+): Promise<ParseResult> {
+  return new Promise((resolve, reject) => {
+    let worker: Worker
+    try {
+      worker = new Worker(new URL('./import.worker.ts', import.meta.url), { type: 'module' })
+    } catch {
+      resolve(parseFile(file, onProgress))
+      return
+    }
+    worker.onmessage = (e: MessageEvent) => {
+      const msg = e.data
+      if (msg.type === 'progress') {
+        onProgress?.(msg.done, msg.total)
+      } else if (msg.type === 'done') {
+        worker.terminate()
+        resolve(msg.result as ParseResult)
+      } else if (msg.type === 'error') {
+        worker.terminate()
+        reject(new Error(msg.message as string))
+      }
+    }
+    worker.onerror = () => {
+      worker.terminate()
+      reject(new Error('解析线程异常'))
+    }
+    worker.postMessage({ file })
+  })
 }
