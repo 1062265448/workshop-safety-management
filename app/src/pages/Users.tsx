@@ -117,7 +117,7 @@ export default function Users() {
       <header>
         <h1 className="text-2xl font-semibold">用户管理</h1>
         <p className="text-[13px] text-neutral-400 mt-1">
-          管理员：全部权限 · 安全员：录入与整改闭环 · 查看者：仅可浏览（后端强制） · <PageHelpLink anchor="roles" />
+          管理员什么都能干 · 安全员管业务 · 只读账号只能看（改数据会被系统拦下） · <PageHelpLink anchor="roles" />
         </p>
       </header>
 

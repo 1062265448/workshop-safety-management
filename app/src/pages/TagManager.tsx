@@ -33,7 +33,7 @@ export default function TagManager() {
     <div className="max-w-4xl space-y-6">
       <header>
         <h1 className="text-2xl font-semibold">标签管理</h1>
-        <p className="text-sm text-neutral-500 mt-1">按维度组维护标签体系，内置标签不可删除 · <PageHelpLink /></p>
+        <p className="text-sm text-neutral-500 mt-1">类型、区域、自定义三组标签；内置的删不掉 · <PageHelpLink /></p>
       </header>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
