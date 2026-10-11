@@ -2,6 +2,7 @@ import 'dotenv/config'
 import { NestFactory } from '@nestjs/core'
 import { RequestMethod, ValidationPipe } from '@nestjs/common'
 import type { NestExpressApplication } from '@nestjs/platform-express'
+import compression from 'compression'
 import { AppModule } from './app.module'
 
 async function bootstrap() {
@@ -13,6 +14,9 @@ async function bootstrap() {
   // 单端口同源架构（后端托管前端），无需放开跨域；公网部署杜绝任意来源调用 API
   app.enableCors({ origin: false })
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }))
+
+  // gzip 压缩：公网隧道带宽小（家庭宽带上行），1.5MB JS 压到约 1/4，首屏明显变快
+  app.use(compression())
 
   // 安全响应头（轻量 helmet）：公网暴露的基本防线
   app.use((req: unknown, res: { setHeader: (k: string, v: string) => void }, next: () => void) => {

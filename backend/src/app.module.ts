@@ -20,6 +20,15 @@ import { UsersModule } from './modules/users/users.module'
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', '..', 'app', 'dist'),
       exclude: ['/api/(.*)', '/uploads/(.*)'],
+      serveStaticOptions: {
+        // Vite 产物文件名带内容哈希（index-xxx.js），内容变则文件名变——
+        // 长缓存 immutable：内网/公网重复访问只下载一次，之后全部走本地缓存
+        setHeaders: (res, path) => {
+          if (path.replace(/\\/g, '/').includes('/assets/')) {
+            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+          }
+        },
+      },
     }),
     AuthModule,
     IssuesModule,
