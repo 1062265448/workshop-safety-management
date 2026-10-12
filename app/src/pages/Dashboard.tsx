@@ -29,32 +29,6 @@ export default function Dashboard() {
         <p className="text-sm text-neutral-500 mt-1">下面数字都只算成品车间</p>
       </header>
 
-      {/* 新手上路：快速引导（可点右上角关闭，仅本地记忆） */}
-      {!localStorage.getItem('wsms-hide-guide') && (
-        <section className="bg-gradient-to-br from-[#007AFF]/5 to-transparent border border-[#007AFF]/15 rounded-2xl p-5">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <h2 className="text-[15px] font-semibold text-[#007AFF]">第一次用？照这三步走</h2>
-              <ol className="mt-2.5 space-y-1.5 text-[13px] text-neutral-600">
-                <li><strong className="text-neutral-900">① 登记</strong>：巡检发现的问题到「问题录入」登记；厂督察发了通报，把 PPT 直接传上去，系统自动识别</li>
-                <li><strong className="text-neutral-900">② 整改</strong>：到「问题库」点每条隐患的蓝色按钮，一步一个状态，走到"已闭环"</li>
-                <li><strong className="text-neutral-900">③ 复查</strong>：闭环后每 7 天复查一次、满 3 次才算完，到点系统会提醒，别拖着</li>
-              </ol>
-              <Link to="/help" className="inline-flex items-center gap-1 mt-3 text-[13px] text-[#007AFF] font-medium">
-                看完整使用手册 <ArrowRight className="w-3.5 h-3.5" />
-              </Link>
-            </div>
-            <button
-              onClick={(e) => { localStorage.setItem('wsms-hide-guide', '1'); e.currentTarget.closest('section')?.remove() }}
-              className="text-neutral-300 hover:text-neutral-500 text-lg leading-none shrink-0"
-              title="关闭引导"
-            >
-              ×
-            </button>
-          </div>
-        </section>
-      )}
-
       {/* 指标卡 */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {cards.map(({ label, value, icon: Icon, color, bg }) => (

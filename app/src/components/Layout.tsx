@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router'
 import {
-  LayoutDashboard, FilePlus2, ClipboardList, Flag, Tags, BarChart3, CalendarClock, Bell, ShieldCheck, LogOut, Menu, X, Users, BookOpen,
+  LayoutDashboard, FilePlus2, ClipboardList, Flag, Tags, BarChart3, CalendarClock, Bell, ShieldCheck, LogOut, Menu, X, Users,
 } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { cn } from '@/lib/utils'
@@ -58,19 +58,6 @@ export default function Layout() {
           用户管理
         </NavLink>
       )}
-      <NavLink
-        to="/help"
-        onClick={onNavigate}
-        className={({ isActive }) =>
-          cn(
-            'flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-[14px] transition-colors',
-            isActive ? 'bg-[#007AFF]/10 text-[#007AFF] font-medium' : 'text-neutral-600 hover:bg-neutral-100',
-          )
-        }
-      >
-        <BookOpen className="w-4 h-4" strokeWidth={2} />
-        使用手册
-      </NavLink>
     </>
   )
 

@@ -3,7 +3,6 @@ import { Flag, Loader2, Check } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { fmtDate } from '@/lib/format'
 import { RISK_LABEL } from '@/components/badges'
-import PageHelpLink from '@/components/PageHelpLink'
 import type { IssueAnnotation, RelevanceLevel, SafetyIssue } from '@/types'
 
 // ─────────────────────────────────────────────────────────────
@@ -59,7 +58,7 @@ export default function Annotations() {
       <header>
         <h1 className="text-2xl font-semibold">参考标注</h1>
         <p className="text-sm text-neutral-500 mt-1">
-          逐条看看其他车间的问题跟咱们像不像、要注意什么 · <PageHelpLink />
+          逐条看看其他车间的问题跟咱们像不像、要注意什么
         </p>
         <p className="text-[13px] text-neutral-400 mt-1.5">
           已标注 {doneCount} / {refs.length} 条{highCount > 0 && ` · `}

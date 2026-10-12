@@ -13,7 +13,6 @@ const TagManager = lazy(() => import('./pages/TagManager'))
 const Statistics = lazy(() => import('./pages/Statistics'))
 const Plans = lazy(() => import('./pages/Plans'))
 const Users = lazy(() => import('./pages/Users'))
-const Help = lazy(() => import('./pages/Help'))
 
 function PageLoading() {
   return (
@@ -45,7 +44,8 @@ export default function App() {
             <Route path="/plans" element={<Plans />} />
             {/* 用户管理仅管理员可见；其余角色访问时回到总览（后端仍做双重校验） */}
             <Route path="/users" element={isAdmin ? <Users /> : <Navigate to="/" replace />} />
-            <Route path="/help" element={<Help />} />
+            {/* 未知路径（含已删除的 /help 旧书签）回总览 */}
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>
       </Suspense>

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { KeyRound, Loader2, Pencil, Plus, Trash2, UserRound, X } from 'lucide-react'
 import { getCurrentUser, ROLE_LABEL, type CurrentUser } from '@/lib/auth'
-import PageHelpLink from '@/components/PageHelpLink'
 import { cn } from '@/lib/utils'
 
 // ─────────────────────────────────────────────────────────────
@@ -117,7 +116,7 @@ export default function Users() {
       <header>
         <h1 className="text-2xl font-semibold">用户管理</h1>
         <p className="text-[13px] text-neutral-400 mt-1">
-          管理员什么都能干 · 安全员管业务 · 只读账号只能看（改数据会被系统拦下） · <PageHelpLink anchor="roles" />
+          管理员什么都能干 · 安全员管业务 · 只读账号只能看（改数据会被系统拦下）
         </p>
       </header>
 

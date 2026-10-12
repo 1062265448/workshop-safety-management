@@ -6,7 +6,6 @@ import {
 import { useStore } from '@/lib/store'
 import { fmtDate } from '@/lib/format'
 import { RISK_COLOR, RISK_LABEL } from '@/components/badges'
-import PageHelpLink from '@/components/PageHelpLink'
 import type { RiskLevel } from '@/types'
 
 type Period = 'week' | 'month' | 'quarter'
@@ -72,7 +71,7 @@ export default function Statistics() {
           <div>
             <h1 className="text-2xl font-semibold">周期统计</h1>
             <p className="text-sm text-neutral-500 mt-1">
-              新增 {data.total} 条 · 闭环 {data.closed} 条{data.closeRate !== null && ` · 按期闭环率 ${data.closeRate}%`} · <PageHelpLink />
+              新增 {data.total} 条 · 闭环 {data.closed} 条{data.closeRate !== null && ` · 按期闭环率 ${data.closeRate}%`}
             </p>
           </div>
           <div className="flex gap-1 bg-neutral-200/60 p-1 rounded-xl">

@@ -1,7 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { CheckCircle2, ChevronLeft, ChevronRight, Circle, ImagePlus, Search, Trash2, X } from 'lucide-react'
 import { isOverdue, uploadPhotos, useStore } from '@/lib/store'
-import PageHelpLink from '@/components/PageHelpLink'
 import { fmtDate, fmtDateTime } from '@/lib/format'
 import { RISK_LABEL, RiskBadge, SOURCE_LABEL, STATUS_LABEL, StatusBadge } from '@/components/badges'
 import { RELEVANCE_BADGE } from '@/pages/Annotations'
@@ -155,7 +154,7 @@ export default function IssueList() {
     <div className="max-w-5xl space-y-5">
       <header>
         <h1 className="text-2xl font-semibold">问题库</h1>
-        <p className="text-sm text-neutral-500 mt-1">全部隐患记录 · 共 {issues.length} 条 · <PageHelpLink /></p>
+        <p className="text-sm text-neutral-500 mt-1">全部隐患记录 · 共 {issues.length} 条</p>
       </header>
 
       {/* 范围页签：成品车间（闭环管理）/ 其他车间（参考） */}

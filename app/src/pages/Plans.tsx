@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { Bell, CalendarClock, Plus, Trash2 } from 'lucide-react'
 import { useStore } from '@/lib/store'
-import PageHelpLink from '@/components/PageHelpLink'
 import { fmtDateTime } from '@/lib/format'
 import type { PlanFrequency } from '@/types'
 
@@ -58,7 +57,7 @@ export default function Plans() {
     <div className="max-w-4xl space-y-6">
       <header>
         <h1 className="text-2xl font-semibold">检查计划与提醒</h1>
-        <p className="text-sm text-neutral-500 mt-1">周期检查计划到点提醒；整改超期自动生成提醒 · <PageHelpLink /></p>
+        <p className="text-sm text-neutral-500 mt-1">周期检查计划到点提醒；整改超期自动生成提醒</p>
       </header>
 
       {/* 新建计划 */}
