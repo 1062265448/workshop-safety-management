@@ -26,9 +26,25 @@ export function detectSource(fileName: string): IssueSource | null {
   return null
 }
 
+/** ZIP 容器魔数（PK\x03\x04）：pptx/docx 都是 zip 包；旧版 .ppt/.doc 二进制文件开头不是它 */
+async function isZipContainer(file: File): Promise<boolean> {
+  const head = new Uint8Array(await file.slice(0, 4).arrayBuffer())
+  return head[0] === 0x50 && head[1] === 0x4b && head[2] === 0x03 && head[3] === 0x04
+}
+
 export async function parseFile(file: File, onProgress?: (done: number, total: number) => void): Promise<ParseResult> {
   const source = detectSource(file.name)
   if (!source) throw new Error(`不支持的文件格式：${file.name}`)
+
+  // 旧版二进制格式（.ppt/.doc）会被 detectSource 映射到新格式解析器，直接报莫名其妙的错——提前拦住，给出能操作的提示
+  if ((source === 'pptx' || source === 'docx') && !(await isZipContainer(file))) {
+    const ext = file.name.toLowerCase().split('.').pop()
+    throw new Error(
+      ext === 'ppt' || ext === 'doc'
+        ? `「${file.name}」是旧版 .${ext} 格式，系统只认新格式：请用 WPS 或 Office 打开它，另存为 .${ext}x 后再导入`
+        : `「${file.name}」打不开，文件可能已损坏`,
+    )
+  }
 
   let result: ParseResult = { drafts: [], reviews: [], skipped: [] }
   switch (source) {

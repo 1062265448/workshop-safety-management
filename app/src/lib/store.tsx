@@ -64,12 +64,36 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+/** 上传前压缩：最长边压到 1600px、JPEG 0.8（300KB 以下不压；解码失败退回原文件） */
+async function compressPhoto(file: File): Promise<File> {
+  if (file.size <= 300 * 1024) return file
+  try {
+    const bmp = await createImageBitmap(file)
+    const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height))
+    const w = Math.max(1, Math.round(bmp.width * scale))
+    const h = Math.max(1, Math.round(bmp.height * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = '#fff' // PNG 透明底垫白，转 JPEG 不发黑
+    ctx.fillRect(0, 0, w, h)
+    ctx.drawImage(bmp, 0, 0, w, h)
+    bmp.close()
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8))
+    if (!blob || blob.size >= file.size) return file
+    return new File([blob], file.name.replace(/\.\w+$/, '.jpg'), { type: 'image/jpeg' })
+  } catch {
+    return file
+  }
+}
+
 /** 上传隐患照片，返回可持久化的路径列表（/uploads/xxx） */
 export async function uploadPhotos(files: File[]): Promise<string[]> {
   if (!files.length) return []
   const token = localStorage.getItem('wsms-token')
   const fd = new FormData()
-  for (const f of files) fd.append('files', f)
+  for (const f of files) fd.append('files', await compressPhoto(f))
   const res = await fetch('/api/uploads', {
     method: 'POST',
     headers: token ? { Authorization: `Bearer ${token}` } : {},

@@ -175,6 +175,9 @@ export default function IssueEntry() {
       setSkipped([])
       setSourceFile(null)
       navigate('/issues')
+    } catch (e) {
+      // 照片上传/入库失败要让用户看见原因，不能默默卡死
+      setParseError(e instanceof Error ? e.message : '导入失败，请重试')
     } finally {
       setImporting(false)
     }
