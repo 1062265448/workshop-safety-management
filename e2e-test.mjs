@@ -1,9 +1,15 @@
 // WSMS 端到端 API 测试：直连后端 3100（后端托管前端，单端口）→ PostgreSQL
-const BASE = 'http://localhost:3100/api'
-const ORIGIN = 'http://localhost:3100'
-// 回归测试专用管理员（每日定时任务使用；与线上账户一致）
-const ADMIN_USER = 'safe2026'
-const ADMIN_PASS = 'g6i99HWI6hWb'
+const BASE = process.env.WSMS_BASE || 'http://localhost:3100/api'
+const ORIGIN = BASE.replace(/\/api\/?$/, '')
+// 凭据一律从环境变量读取，禁止写进仓库（本仓库为公开仓库）：
+//   Windows:  set WSMS_USER=xxx && set WSMS_PASS=xxx && node e2e-test.mjs
+//   Linux:    WSMS_USER=xxx WSMS_PASS=xxx node e2e-test.mjs
+const ADMIN_USER = process.env.WSMS_USER
+const ADMIN_PASS = process.env.WSMS_PASS
+if (!ADMIN_USER || !ADMIN_PASS) {
+  console.error('请先设置环境变量 WSMS_USER 与 WSMS_PASS（回归测试账号的用户名和密码）')
+  process.exit(1)
+}
 let token = ''
 let passed = 0, failed = 0
 const failures = []
