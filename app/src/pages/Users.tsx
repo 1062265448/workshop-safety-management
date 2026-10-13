@@ -115,9 +115,6 @@ export default function Users() {
     <div className="max-w-3xl space-y-4">
       <header>
         <h1 className="text-2xl font-semibold">用户管理</h1>
-        <p className="text-[13px] text-neutral-400 mt-1">
-          管理员什么都能干 · 安全员管业务 · 只读账号只能看（改数据会被系统拦下）
-        </p>
       </header>
 
       {msg && (

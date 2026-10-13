@@ -58,7 +58,7 @@ export default function Annotations() {
       <header>
         <h1 className="text-2xl font-semibold">参考标注</h1>
         <p className="text-sm text-neutral-500 mt-1">
-          逐条看看其他车间的问题跟咱们像不像、要注意什么
+          其他车间与成品车间划线参考对比
         </p>
         <p className="text-[13px] text-neutral-400 mt-1.5">
           已标注 {doneCount} / {refs.length} 条{highCount > 0 && ` · `}

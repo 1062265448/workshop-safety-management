@@ -93,7 +93,7 @@ export default function Knowledge() {
         <h1 className="text-[22px] font-bold text-neutral-900 flex items-center gap-2">
           <BookOpen size={22} className="text-[#007AFF]" /> 车间知识库
         </h1>
-        <p className="mt-1 text-[13px] text-neutral-500">用大白话提问，系统从历年隐患、整改记录和督查通报里找答案</p>
+        <p className="mt-1 text-[13px] text-neutral-500">历年隐患、整改记录和督查通报</p>
       </div>
 
       {/* 状态卡 */}
