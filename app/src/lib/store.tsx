@@ -37,7 +37,7 @@ interface Store extends State {
   markReminderRead: (id: string) => void
   refreshReminders: () => void
   /** 保存参考件标注（upsert，一隐患一条） */
-  saveAnnotation: (issueId: string, body: { relevance: string; similarity: string; caution: string }) => void
+  saveAnnotation: (issueId: string, body: { relevance: string; similarity: string; caution: string; tagId?: string | null }) => void
   /** 清除参考件标注 */
   removeAnnotation: (issueId: string) => void
 }

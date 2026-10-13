@@ -57,6 +57,8 @@ model IssueAnnotation {
   similarity String @default("")
   /// 需要严格注意的事项
   caution    String @default("")
+  /// 标注的隐患类型标签 id（对应 tags 表 group=category，可空表示未归类）
+  tagId      String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

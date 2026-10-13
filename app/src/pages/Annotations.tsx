@@ -3,7 +3,7 @@ import { Flag, Loader2, Check } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { fmtDate } from '@/lib/format'
 import { RISK_LABEL } from '@/components/badges'
-import type { IssueAnnotation, RelevanceLevel, SafetyIssue } from '@/types'
+import type { IssueAnnotation, RelevanceLevel, SafetyIssue, Tag } from '@/types'
 
 // ─────────────────────────────────────────────────────────────
 // 参考标注：逐条评估其他车间问题对成品车间的参考意义
@@ -33,6 +33,8 @@ export default function Annotations() {
     [issues],
   )
   const byIssueId = useMemo(() => new Map(annotations.map((a) => [a.issueId, a])), [annotations])
+  const categories = useMemo(() => tags.filter((t) => t.group === 'category'), [tags])
+  const tagById = useMemo(() => new Map(tags.map((t) => [t.id, t])), [tags])
 
   const list = useMemo(() => {
     const sorted = [...refs].sort((a, b) => {
@@ -92,6 +94,8 @@ export default function Annotations() {
             issue={issue}
             locationName={tags.find((t) => t.id === issue.locationId)?.name}
             annotation={byIssueId.get(issue.id)}
+            categories={categories}
+            tagById={tagById}
             onSave={(body) => saveAnnotation(issue.id, body)}
             onClear={() => removeAnnotation(issue.id)}
           />
@@ -102,29 +106,33 @@ export default function Annotations() {
 }
 
 function AnnotationCard({
-  issue, locationName, annotation, onSave, onClear,
+  issue, locationName, annotation, categories, tagById, onSave, onClear,
 }: {
   issue: SafetyIssue
   locationName?: string
   annotation?: IssueAnnotation
-  onSave: (body: { relevance: string; similarity: string; caution: string }) => void
+  categories: Tag[]
+  tagById: Map<string, Tag>
+  onSave: (body: { relevance: string; similarity: string; caution: string; tagId: string | null }) => void
   onClear: () => void
 }) {
   const [relevance, setRelevance] = useState<RelevanceLevel>(annotation?.relevance ?? 'medium')
   const [similarity, setSimilarity] = useState(annotation?.similarity ?? '')
   const [caution, setCaution] = useState(annotation?.caution ?? '')
+  const [tagId, setTagId] = useState(annotation?.tagId ?? '')
   const [saving, setSaving] = useState(false)
   const [savedTick, setSavedTick] = useState(false)
 
   const dirty =
     relevance !== (annotation?.relevance ?? 'medium') ||
     similarity !== (annotation?.similarity ?? '') ||
-    caution !== (annotation?.caution ?? '')
+    caution !== (annotation?.caution ?? '') ||
+    tagId !== (annotation?.tagId ?? '')
 
   const save = () => {
     if (saving) return
     setSaving(true)
-    onSave({ relevance, similarity, caution })
+    onSave({ relevance, similarity, caution, tagId: tagId || null })
     // store 失败会置 offline 提示条；本地给一个短暂的"已保存"反馈
     setTimeout(() => { setSaving(false); setSavedTick(true); setTimeout(() => setSavedTick(false), 1600) }, 350)
   }
@@ -145,9 +153,22 @@ function AnnotationCard({
             </div>
           </div>
           {annotation && (
-            <span className={`shrink-0 px-2 py-0.5 rounded-md text-[11px] font-medium ${RELEVANCE_BADGE[annotation.relevance].cls}`}>
-              {RELEVANCE_BADGE[annotation.relevance].label}
-            </span>
+            <div className="shrink-0 flex flex-col items-end gap-1">
+              <span className={`px-2 py-0.5 rounded-md text-[11px] font-medium ${RELEVANCE_BADGE[annotation.relevance].cls}`}>
+                {RELEVANCE_BADGE[annotation.relevance].label}
+              </span>
+              {annotation.tagId && tagById.get(annotation.tagId) && (
+                <span
+                  className="px-2 py-0.5 rounded-full text-[11px] font-medium"
+                  style={{
+                    backgroundColor: `${tagById.get(annotation.tagId)!.color}1F`,
+                    color: tagById.get(annotation.tagId)!.color,
+                  }}
+                >
+                  {tagById.get(annotation.tagId)!.name}
+                </span>
+              )}
+            </div>
           )}
         </div>
         {issue.description && (
@@ -176,6 +197,21 @@ function AnnotationCard({
               {RELEVANCE_META[lv].label}
             </button>
           ))}
+        </div>
+
+        {/* 隐患类型标签 */}
+        <div className="flex items-center gap-2">
+          <span className="text-[12px] text-neutral-500 shrink-0">隐患类型</span>
+          <select
+            className="flex-1 px-3 py-1.5 rounded-lg bg-white border border-neutral-200 text-[12px] outline-none focus:ring-2 ring-[#007AFF]/30"
+            value={tagId}
+            onChange={(e) => setTagId(e.target.value)}
+          >
+            <option value="">未归类</option>
+            {categories.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
         </div>
 
         <input

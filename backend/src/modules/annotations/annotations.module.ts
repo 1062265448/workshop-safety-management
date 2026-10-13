@@ -17,13 +17,21 @@ export class AnnotationsService {
     return this.prisma.issueAnnotation.findMany({ orderBy: { updatedAt: 'desc' } })
   }
 
-  async upsert(issueId: string, body: { relevance?: string; similarity?: string; caution?: string }) {
+  async upsert(issueId: string, body: { relevance?: string; similarity?: string; caution?: string; tagId?: string | null }) {
     const issue = await this.prisma.issue.findUnique({ where: { id: issueId } })
     if (!issue) throw new NotFoundException(`Issue ${issueId} not found`)
+    // 隐患类型标签：传 null/空串清除；传值则必须存在于 tags 表
+    let tagId: string | null = null
+    if (body.tagId) {
+      const tag = await this.prisma.tag.findUnique({ where: { id: body.tagId } })
+      if (!tag) throw new NotFoundException(`Tag ${body.tagId} not found`)
+      tagId = tag.id
+    }
     const data = {
       relevance: RELEVANCE.has(body.relevance ?? '') ? body.relevance! : 'medium',
       similarity: (body.similarity ?? '').trim(),
       caution: (body.caution ?? '').trim(),
+      tagId,
     }
     return this.prisma.issueAnnotation.upsert({
       where: { issueId },
@@ -47,7 +55,7 @@ export class AnnotationsController {
   }
 
   @Put(':issueId')
-  upsert(@Param('issueId') issueId: string, @Body() body: { relevance?: string; similarity?: string; caution?: string }) {
+  upsert(@Param('issueId') issueId: string, @Body() body: { relevance?: string; similarity?: string; caution?: string; tagId?: string | null }) {
     return this.svc.upsert(issueId, body ?? {})
   }
 

@@ -112,6 +112,8 @@ export interface IssueAnnotation {
   similarity: string
   /** 需要严格注意的事项 */
   caution: string
+  /** 标注的隐患类型标签 id（对应 group=category，null 表示未归类） */
+  tagId?: string | null
   createdAt: string
   updatedAt: string
 }
