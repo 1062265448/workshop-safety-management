@@ -47,15 +47,54 @@ export class IssuesService {
   }
 
   create(body: Record<string, unknown>) {
-    return this.prisma.issue.create({ data: pick(body) })
+    return this.prisma.issue.create({ data: pick(body) }).then(async (issue) => {
+      await this.refreshGridOwnerReminder(issue.gridOwner)
+      return issue
+    })
   }
 
   createBatch(items: Record<string, unknown>[]) {
-    return this.prisma.$transaction(items.map((item) => this.prisma.issue.create({ data: pick(item) })))
+    return this.prisma.$transaction(items.map((item) => this.prisma.issue.create({ data: pick(item) }))).then(async (created) => {
+      for (const name of new Set(created.map((i) => i.gridOwner))) await this.refreshGridOwnerReminder(name)
+      return created
+    })
   }
 
-  update(id: string, body: Record<string, unknown>) {
-    return this.prisma.issue.update({ where: { id }, data: pick(body) })
+  async update(id: string, body: Record<string, unknown>) {
+    const before = await this.prisma.issue.findUnique({ where: { id } })
+    const issue = await this.prisma.issue.update({ where: { id }, data: pick(body) })
+    for (const name of new Set([before?.gridOwner, issue.gridOwner])) await this.refreshGridOwnerReminder(name)
+    return issue
+  }
+
+  /**
+   * 网格责任人重复提醒：同一责任人在成品车间隐患中出现
+   * ≥2 次 → 提醒中心生成提醒；≥3 次 → 标题升级为严重提醒（加倍考核）。
+   * 低于 2 次时提醒自动撤销；次数变化只更新标题，不重置已读状态。
+   */
+  private async refreshGridOwnerReminder(gridOwner?: string | null) {
+    const name = gridOwner?.trim()
+    if (!name) return
+    const count = await this.prisma.issue.count({
+      where: { scope: 'managed', gridOwner: name },
+    })
+    const refId = `gridowner:${name}`
+    if (count < 2) {
+      await this.prisma.reminder.deleteMany({ where: { type: 'gridowner', refId } })
+      return
+    }
+    const title =
+      count >= 3
+        ? `严重提醒：网格责任人「${name}」已在 ${count} 条成品车间隐患中重复出现，建议加倍考核并专项排查`
+        : `网格责任人「${name}」已在 ${count} 条成品车间隐患中重复出现，请关注`
+    const existing = await this.prisma.reminder.findFirst({ where: { type: 'gridowner', refId } })
+    if (existing) {
+      if (existing.title !== title) {
+        await this.prisma.reminder.update({ where: { id: existing.id }, data: { title, triggerAt: new Date() } })
+      }
+    } else {
+      await this.prisma.reminder.create({ data: { type: 'gridowner', refId, title, triggerAt: new Date() } })
+    }
   }
 
   /** 记录一次防复发复查：追加完成时间，并清掉该隐患的复查提醒 */
@@ -71,8 +110,11 @@ export class IssuesService {
   }
 
   async remove(id: string) {
+    const issue = await this.prisma.issue.findUnique({ where: { id } })
     // 级联清理：参考件标注随隐患一并删除
     await this.prisma.issueAnnotation.deleteMany({ where: { issueId: id } })
-    return this.prisma.issue.delete({ where: { id } })
+    const deleted = await this.prisma.issue.delete({ where: { id } })
+    await this.refreshGridOwnerReminder(issue?.gridOwner)
+    return deleted
   }
 }

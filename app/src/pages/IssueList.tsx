@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { CheckCircle2, ChevronLeft, ChevronRight, Circle, ImagePlus, Search, Trash2, X } from 'lucide-react'
 import { isOverdue, uploadPhotos, useStore } from '@/lib/store'
-import { TEAMS, countGridOwners } from '@/lib/config'
+import { TEAMS, countGridOwners, gridOwnerTier } from '@/lib/config'
 import { fmtDate, fmtDateTime } from '@/lib/format'
 import { RISK_LABEL, RiskBadge, SOURCE_LABEL, STATUS_LABEL, StatusBadge } from '@/components/badges'
 import { RELEVANCE_BADGE } from '@/pages/Annotations'
@@ -238,15 +238,22 @@ export default function IssueList() {
                 })()}
                 <RiskBadge level={i.riskLevel} />
                 <StatusBadge status={i.status} overdue={isOverdue(i)} />
-                {/* 网格责任人重复提醒：≥2 次出现的专门标红 */}
-                {i.gridOwner && (gridOwnerCounts.get(i.gridOwner.trim()) ?? 0) >= 2 && (
-                  <span
-                    className="px-2 py-0.5 rounded-md text-[12px] font-medium bg-[#FF3B30]/10 text-[#D70015]"
-                    title={`网格责任人「${i.gridOwner.trim()}」已在 ${gridOwnerCounts.get(i.gridOwner.trim())} 条成品车间隐患中重复出现，建议专项分析`}
-                  >
-                    责任人重复 ×{gridOwnerCounts.get(i.gridOwner.trim())}
-                  </span>
-                )}
+                {/* 网格责任人重复提醒：2 次橙色提醒，≥3 次红色严重提醒（加倍考核） */}
+                {i.gridOwner && (() => {
+                  const count = gridOwnerCounts.get(i.gridOwner.trim()) ?? 0
+                  const tier = gridOwnerTier(count)
+                  if (!tier) return null
+                  return (
+                    <span
+                      className={`px-2 py-0.5 rounded-md text-[12px] font-medium ${
+                        tier === 'severe' ? 'bg-[#FF3B30] text-white' : 'bg-[#FF9500]/12 text-[#B25000]'
+                      }`}
+                      title={`网格责任人「${i.gridOwner.trim()}」已在 ${count} 条成品车间隐患中重复出现${tier === 'severe' ? '，建议加倍考核并专项排查' : '，请关注'}`}
+                    >
+                      {tier === 'severe' ? `严重重复 ×${count} · 加倍考核` : `责任人重复 ×${count}`}
+                    </span>
+                  )
+                })()}
                 <span className="text-[11px] text-neutral-400">{SOURCE_LABEL[i.source]}</span>
               </div>
               {i.description && <p className="text-[13px] text-neutral-500 line-clamp-1">{i.description}</p>}
@@ -404,7 +411,10 @@ export default function IssueList() {
                   <span className="text-neutral-400 text-[12px]">网格责任人</span>
                   <input className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] outline-none" value={editForm.gridOwner} onChange={(e) => setEditForm({ ...editForm, gridOwner: e.target.value })} />
                   {editForm.gridOwner.trim() && (gridOwnerCounts.get(editForm.gridOwner.trim()) ?? 0) >= 1 && editForm.gridOwner.trim() !== (detailIssue.gridOwner ?? '') && (
-                    <span className="text-[11px] text-[#D70015]">该责任人已在其他 {gridOwnerCounts.get(editForm.gridOwner.trim())} 条隐患中出现，保存后将触发重复提醒</span>
+                    <span className="text-[11px] text-[#D70015]">
+                      该责任人已在其他 {gridOwnerCounts.get(editForm.gridOwner.trim())} 条隐患中出现
+                      {(gridOwnerCounts.get(editForm.gridOwner.trim()) ?? 0) >= 2 ? '，保存后将达 3 次以上，升级为严重提醒（加倍考核）' : '，保存后将触发重复提醒'}
+                    </span>
                   )}
                 </label>
                 <label className="space-y-1">
@@ -434,10 +444,17 @@ export default function IssueList() {
               {detailIssue.gridOwner && (
                 <div>
                   <dt className="text-neutral-400 text-[12px]">网格责任人</dt>
-                  <dd className={`mt-0.5 ${(gridOwnerCounts.get(detailIssue.gridOwner.trim()) ?? 0) >= 2 ? 'text-[#D70015] font-medium' : ''}`}>
-                    {detailIssue.gridOwner}
-                    {(gridOwnerCounts.get(detailIssue.gridOwner.trim()) ?? 0) >= 2 && `（重复 ×${gridOwnerCounts.get(detailIssue.gridOwner.trim())}）`}
-                  </dd>
+                  {(() => {
+                    const count = gridOwnerCounts.get(detailIssue.gridOwner.trim()) ?? 0
+                    const tier = gridOwnerTier(count)
+                    return (
+                      <dd className={`mt-0.5 ${tier === 'severe' ? 'text-[#D70015] font-semibold' : tier === 'warn' ? 'text-[#B25000] font-medium' : ''}`}>
+                        {detailIssue.gridOwner}
+                        {tier === 'severe' && `（严重重复 ×${count}）`}
+                        {tier === 'warn' && `（重复 ×${count}）`}
+                      </dd>
+                    )
+                  })()}
                 </div>
               )}
               {detailIssue.systemOwner && <div><dt className="text-neutral-400 text-[12px]">系统责任人</dt><dd className="mt-0.5">{detailIssue.systemOwner}</dd></div>}
@@ -454,12 +471,22 @@ export default function IssueList() {
               </div>
             )}
 
-            {/* 网格责任人重复提醒：≥2 次出现，醒目提示专项分析 */}
-            {!editing && detailIssue.gridOwner && (gridOwnerCounts.get(detailIssue.gridOwner.trim()) ?? 0) >= 2 && (
-              <div className="rounded-xl bg-[#FF3B30]/8 border border-[#FF3B30]/20 p-3.5 text-[13px] text-[#D70015] leading-relaxed">
-                网格责任人「{detailIssue.gridOwner.trim()}」已在 {gridOwnerCounts.get(detailIssue.gridOwner.trim())} 条成品车间隐患中重复出现，建议对其负责网格开展专项排查与原因分析。
-              </div>
-            )}
+            {/* 网格责任人重复提醒：2 次橙色提醒，≥3 次红色严重提醒（加倍考核） */}
+            {!editing && detailIssue.gridOwner && (() => {
+              const count = gridOwnerCounts.get(detailIssue.gridOwner.trim()) ?? 0
+              const tier = gridOwnerTier(count)
+              if (!tier) return null
+              return tier === 'severe' ? (
+                <div className="rounded-xl bg-[#FF3B30]/8 border border-[#FF3B30]/25 p-3.5 text-[13px] text-[#D70015] leading-relaxed">
+                  <span className="font-semibold">严重提醒：</span>
+                  网格责任人「{detailIssue.gridOwner.trim()}」已在 {count} 条成品车间隐患中重复出现（≥3 次），建议加倍考核，并对其负责网格开展专项排查与原因分析。
+                </div>
+              ) : (
+                <div className="rounded-xl bg-[#FF9500]/8 border border-[#FF9500]/25 p-3.5 text-[13px] text-[#B25000] leading-relaxed">
+                  网格责任人「{detailIssue.gridOwner.trim()}」已在 {count} 条成品车间隐患中重复出现，请关注；若达到 3 次将升级为严重提醒（加倍考核）。
+                </div>
+              )
+            })()}
 
             {/* 整改记录 */}
             {!editing && detailIssue.fixNote && (

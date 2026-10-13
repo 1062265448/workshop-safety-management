@@ -18,3 +18,10 @@ export function countGridOwners(issues: Array<{ scope: string; gridOwner?: strin
   }
   return map
 }
+
+/** 网格责任人重复分级：2 次=普通提醒（橙），≥3 次=严重提醒/加倍考核（红） */
+export function gridOwnerTier(count: number): 'warn' | 'severe' | null {
+  if (count >= 3) return 'severe'
+  if (count >= 2) return 'warn'
+  return null
+}

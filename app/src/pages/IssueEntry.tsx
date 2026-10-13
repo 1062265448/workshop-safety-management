@@ -316,7 +316,10 @@ export default function IssueEntry() {
                 <input className={inputCls} value={form.gridOwner} onChange={(e) => setForm({ ...form, gridOwner: e.target.value })} />
                 {form.gridOwner.trim() && (gridOwnerCounts.get(form.gridOwner.trim()) ?? 0) >= 1 && (
                   <p className="text-[12px] text-[#D70015] mt-1.5">
-                    该责任人已在 {gridOwnerCounts.get(form.gridOwner.trim())} 条成品车间隐患中出现，本条登记后将触发重复提醒
+                    该责任人已在 {gridOwnerCounts.get(form.gridOwner.trim())} 条成品车间隐患中出现
+                    {(gridOwnerCounts.get(form.gridOwner.trim()) ?? 0) >= 2
+                      ? '，本条登记后将达 3 次以上，升级为严重提醒（加倍考核）'
+                      : '，本条登记后将触发重复提醒'}
                   </p>
                 )}
               </div>
