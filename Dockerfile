@@ -37,6 +37,9 @@ COPY --from=backend-build /build/backend/dist ./dist
 COPY --from=backend-build /build/backend/prisma ./prisma
 COPY --from=backend-build /build/backend/package.json ./package.json
 
+# 本地嵌入模型（bge-large-zh，约 327MB，打进镜像保证离线可用；镜像内不外泄数据）
+COPY backend/models ./models
+
 # 前端产物：app.module.ts 中静态路径为 join(__dirname, '..', '..', 'app', 'dist')
 # __dirname = /app/backend/dist → 解析为 /app/app/dist，此布局不可改动
 COPY --from=app-build /build/app/dist /app/app/dist

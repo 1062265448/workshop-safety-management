@@ -4,7 +4,7 @@
 # ============================================================
 services:
   db:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: wsms-postgres-prod
     restart: unless-stopped
     environment:
@@ -37,6 +37,10 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-wsms}:${POSTGRES_PASSWORD}@${POSTGRES_HOST:-db}:5432/${POSTGRES_DB:-workshop_safety}
       PORT: 3100
       JWT_SECRET: ${JWT_SECRET:?请在 .env.prod 中设置 JWT_SECRET}
+      # 大模型（DeepSeek，可选；留空则知识库仅提供语义检索）
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com/v1}
     ports:
       # 服务器上唯一需要对外（或经反向代理）暴露的端口
       - "${APP_PORT:-3100}:3100"

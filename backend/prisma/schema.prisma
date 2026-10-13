@@ -131,3 +131,32 @@ model Reminder {
   @@unique([type, refId])
   @@map("reminders")
 }
+
+/// 知识库文档（一条隐患 / 一份通报 / 一份规程 = 一个文档）
+model KnowledgeDoc {
+  id        String   @id @default(cuid())
+  /// 文档类型：issue=历史隐患 | annotation=参考标注 | bulletin=督查通报 | manual=规程制度
+  kind      String
+  /// 关联业务 id（如隐患 id），便于溯源跳转
+  refId     String?
+  title     String
+  /// 来源说明（文件名 / 录入方式等）
+  source    String   @default("")
+  createdAt DateTime @default(now())
+  chunks    KnowledgeChunk[]
+
+  @@map("knowledge_docs")
+}
+
+/// 知识库切片：语义检索的最小单元，embedding 为 bge-large-zh 1024 维向量
+model KnowledgeChunk {
+  id        String   @id @default(cuid())
+  docId     String
+  doc       KnowledgeDoc @relation(fields: [docId], references: [id], onDelete: Cascade)
+  seq       Int      @default(0)
+  content   String
+  embedding Unsupported("vector(1024)")?
+
+  @@index([docId])
+  @@map("knowledge_chunks")
+}

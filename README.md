@@ -104,6 +104,14 @@ docker exec wsms-app node dist/seed.js   # 首次全新部署：初始化管理�
 | 标签 | `GET/POST /api/tags`、`PATCH/DELETE /api/tags/:id`（内置标签不可删，删除自动清理引用） |
 | 检查计划 | `GET/POST /api/plans`、`PATCH/DELETE /api/plans/:id` |
 | 提醒 | `GET /api/reminders`、`POST /api/reminders/refresh`（幂等派生：整改超期 + 计划到点）、`PATCH /api/reminders/:id/read|done` |
+| 知识库 | `GET /api/knowledge/status`、`GET /api/knowledge/search?q=`（语义检索）、`POST /api/knowledge/ask`（AI 问答，未配 Key 自动降级纯检索）、`POST /api/knowledge/reindex`（管理员重建索引） |
+
+## 知识库 + AI（RAG）
+
+- **语义检索**：存量隐患（含整改措施/复查记录/参考标注）与督查通报原文经 bge-large-zh 中文嵌入模型（本地离线运行，数据不出本机）向量化存入 pgvector，用大白话即可检索相关案例
+- **AI 问答预留**：OpenAI 兼容协议对接 DeepSeek，配置 `LLM_API_KEY` 后 `/api/knowledge/ask` 自动生成带引用的回答；未配置时优雅降级为纯检索。DeepSeek-V4 发布后改 `LLM_MODEL` 环境变量即可切换
+- 环境变量：`EMBEDDING_MODEL_DIR`（模型目录）、`BULLETIN_DIR`（通报原件目录）、`LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL`
+- 数据库镜像已换为 `pgvector/pgvector:pg16`（开发与生产编排均已更新），迁移 `add_knowledge_base` 自动建表并启用 vector 扩展
 
 ## 数据库
 

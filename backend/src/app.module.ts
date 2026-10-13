@@ -10,6 +10,7 @@ import { RemindersModule } from './modules/reminders/reminders.module'
 import { AnnotationsModule } from './modules/annotations/annotations.module'
 import { UploadsModule } from './modules/uploads/uploads.module'
 import { UsersModule } from './modules/users/users.module'
+import { KnowledgeModule } from './modules/knowledge/knowledge.module'
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { UsersModule } from './modules/users/users.module'
     AnnotationsModule,
     UploadsModule,
     UsersModule,
+    KnowledgeModule,
   ],
   providers: [
     // 全局守卫：AuthGuard 先认证，RolesGuard 再按角色授权（@Roles 显式声明 > 默认 viewer 只读）
