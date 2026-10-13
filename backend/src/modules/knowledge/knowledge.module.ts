@@ -1,8 +1,9 @@
 // ─────────────────────────────────────────────────────────────
 // 知识库模块：把存量业务数据（隐患/参考标注/督查通报）向量化入库，
-// 提供语义检索 + AI 问答（LLM 预留，未配置 Key 时只返回检索结果）
+// 提供语义检索 + AI 问答（LLM 未配置 Key 时只返回检索结果）
+// 重建索引为后台任务：POST /reindex 立即返回，GET /reindex/status 轮询进度
 // ─────────────────────────────────────────────────────────────
-import { Body, Controller, Get, Module, Post, Query } from '@nestjs/common'
+import { Body, Controller, Get, Module, Post, Put, Query } from '@nestjs/common'
 import { Injectable, BadRequestException } from '@nestjs/common'
 import { readdirSync, readFileSync, existsSync } from 'fs'
 import { join, resolve } from 'path'
@@ -12,6 +13,8 @@ import { LlmService, KnowledgeHit } from './llm.service'
 import { Roles } from '../auth/auth.module'
 
 const BULLETIN_DIR = resolve(process.env.BULLETIN_DIR || join(process.cwd(), '..', '厂督察通报'))
+// 嵌入批大小：一次推理 16 段，比逐段调用快约一个数量级
+const EMBED_BATCH = 16
 
 interface DocDraft {
   kind: string
@@ -19,6 +22,15 @@ interface DocDraft {
   title: string
   source: string
   chunks: string[]
+}
+
+export interface ReindexJob {
+  running: boolean
+  total: number
+  done: number
+  docs: number
+  error: string
+  finishedAt: string | null
 }
 
 // 按句/按行切分长文本为 ≤400 字的切片（50 字重叠保持上下文连贯）
@@ -66,6 +78,8 @@ async function extractPptxSlides(filePath: string): Promise<string[]> {
 
 @Injectable()
 export class KnowledgeService {
+  private job: ReindexJob = { running: false, total: 0, done: 0, docs: 0, error: '', finishedAt: null }
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly embedding: EmbeddingService,
@@ -73,9 +87,10 @@ export class KnowledgeService {
   ) {}
 
   async status() {
-    const [docs, chunks] = await Promise.all([
+    const [docs, chunks, llmConfigured] = await Promise.all([
       this.prisma.knowledgeDoc.count(),
       this.prisma.knowledgeChunk.count(),
+      this.llm.isConfigured(),
     ])
     const byKind = await this.prisma.knowledgeDoc.groupBy({ by: ['kind'], _count: true })
     return {
@@ -83,7 +98,7 @@ export class KnowledgeService {
       modelDir: this.embedding.modelDir,
       bulletinDir: BULLETIN_DIR,
       bulletinDirExists: existsSync(BULLETIN_DIR),
-      llm: { configured: this.llm.configured, model: this.llm.model },
+      llm: { configured: llmConfigured, model: (await this.llm.getConfig()).model },
       docs,
       chunks,
       byKind: Object.fromEntries(byKind.map((k) => [k.kind, k._count])),
@@ -145,33 +160,57 @@ export class KnowledgeService {
     return drafts
   }
 
-  /** 全量重建索引（管理员操作；先清后建，保证与业务数据一致） */
-  async reindex() {
+  /** 启动后台全量重建（管理员操作）；已在运行则直接返回当前进度 */
+  startReindex(): ReindexJob {
+    if (this.job.running) return this.job
     if (!this.embedding.ready) throw new BadRequestException(`嵌入模型文件缺失：${this.embedding.modelDir}`)
-    const started = Date.now()
-    const drafts = await this.collectDocs()
-    await this.prisma.knowledgeDoc.deleteMany() // chunks 级联删除
+    this.job = { running: true, total: 0, done: 0, docs: 0, error: '', finishedAt: null }
+    // 不 await：后台跑，前端轮询 /reindex/status
+    void this.runReindex().catch((e) => {
+      this.job.error = (e as Error).message
+      this.job.running = false
+      this.job.finishedAt = new Date().toISOString()
+    })
+    return this.job
+  }
 
-    let chunkTotal = 0
+  reindexStatus(): ReindexJob {
+    return this.job
+  }
+
+  private async runReindex() {
+    const drafts = await this.collectDocs()
+    this.job.docs = drafts.length
+
+    // 先清后建，保证与业务数据一致；文档记录快速落库
+    await this.prisma.knowledgeDoc.deleteMany() // chunks 级联删除
+    const flat: { docId: string; seq: number; content: string }[] = []
     for (const draft of drafts) {
       const doc = await this.prisma.knowledgeDoc.create({
         data: { kind: draft.kind, refId: draft.refId, title: draft.title, source: draft.source },
       })
-      const vectors = await this.embedding.embed(draft.chunks)
-      for (let i = 0; i < draft.chunks.length; i++) {
-        // vector 为 Unsupported 类型，用原生 SQL 写入
+      draft.chunks.forEach((content, seq) => flat.push({ docId: doc.id, seq, content }))
+    }
+    this.job.total = flat.length
+
+    // 批量嵌入 + 批量写库
+    for (let i = 0; i < flat.length; i += EMBED_BATCH) {
+      const batch = flat.slice(i, i + EMBED_BATCH)
+      const vectors = await this.embedding.embed(batch.map((b) => b.content))
+      for (let j = 0; j < batch.length; j++) {
         await this.prisma.$executeRawUnsafe(
           `INSERT INTO knowledge_chunks (id, "docId", seq, content, embedding) VALUES ($1, $2, $3, $4, $5::vector)`,
-          `kc_${doc.id}_${i}`,
-          doc.id,
-          i,
-          draft.chunks[i],
-          `[${vectors[i].join(',')}]`,
+          `kc_${batch[j].docId}_${batch[j].seq}`,
+          batch[j].docId,
+          batch[j].seq,
+          batch[j].content,
+          `[${vectors[j].join(',')}]`,
         )
-        chunkTotal++
       }
+      this.job.done = Math.min(i + EMBED_BATCH, flat.length)
     }
-    return { docs: drafts.length, chunks: chunkTotal, tookMs: Date.now() - started }
+    this.job.running = false
+    this.job.finishedAt = new Date().toISOString()
   }
 
   /** 语义检索：余弦距离取 top N */
@@ -207,10 +246,32 @@ export class KnowledgeController {
     return this.svc.status()
   }
 
+  /** 启动后台重建，立即返回；前端轮询 reindex/status */
   @Post('reindex')
   @Roles('admin')
   reindex() {
-    return this.svc.reindex()
+    return this.svc.startReindex()
+  }
+
+  @Get('reindex/status')
+  reindexStatus() {
+    return this.svc.reindexStatus()
+  }
+
+  /** 查看 LLM 配置（apiKey 脱敏，只回是否已配置） */
+  @Get('config')
+  async getConfig() {
+    const cfg = await this.llm.getConfig()
+    return { baseUrl: cfg.baseUrl, model: cfg.model, apiKeySet: !!cfg.apiKey }
+  }
+
+  /** 保存 LLM 配置（管理员；apiKey 留空表示不改动，clearApiKey 清除已存 Key） */
+  @Put('config')
+  @Roles('admin')
+  async saveConfig(@Body() body: { apiKey?: string; baseUrl?: string; model?: string; clearApiKey?: boolean }) {
+    await this.llm.saveConfig(body ?? {})
+    const cfg = await this.llm.getConfig()
+    return { baseUrl: cfg.baseUrl, model: cfg.model, apiKeySet: !!cfg.apiKey }
   }
 
   @Get('search')
@@ -225,7 +286,7 @@ export class KnowledgeController {
     if (!question) throw new BadRequestException('请输入问题')
     const hits = await this.svc.search(question, 5)
     const answer = hits.length > 0 ? await this.llm.answer(question, hits) : null
-    return { answer, hits, llmConfigured: this.llm.configured, model: this.llm.model }
+    return { answer, hits, llmConfigured: await this.llm.isConfigured(), model: (await this.llm.getConfig()).model }
   }
 }
 

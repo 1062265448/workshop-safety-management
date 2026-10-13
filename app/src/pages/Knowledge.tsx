@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react'
-import { BookOpen, Search, Loader2, Sparkles, RefreshCw, CircleAlert } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { BookOpen, Search, Loader2, Sparkles, RefreshCw, CircleAlert, Settings2, ChevronDown, ChevronUp } from 'lucide-react'
 import { Link } from 'react-router'
 import { getCurrentUser } from '@/lib/auth'
 
 // ─────────────────────────────────────────────────────────────
 // 知识库：语义检索车间历史隐患、参考标注与督查通报原文
-// AI 问答预留给 DeepSeek（后端配置 LLM_API_KEY 后自动启用）
+// AI 问答预留 DeepSeek（管理员在页面「API 配置」里填 Key 即启用）
+// 重建索引为后台任务，前端轮询进度条
 // ─────────────────────────────────────────────────────────────
 
 interface KnowledgeStatus {
@@ -31,6 +32,21 @@ interface AskResult {
   model: string
 }
 
+interface LlmConfigView {
+  baseUrl: string
+  model: string
+  apiKeySet: boolean
+}
+
+interface ReindexJob {
+  running: boolean
+  total: number
+  done: number
+  docs: number
+  error: string
+  finishedAt: string | null
+}
+
 const KIND_META: Record<string, { label: string; cls: string }> = {
   issue: { label: '隐患案例', cls: 'bg-[#007AFF]/10 text-[#007AFF]' },
   bulletin: { label: '督查通报', cls: 'bg-[#FF9500]/12 text-[#B25000]' },
@@ -53,12 +69,50 @@ export default function Knowledge() {
   const [q, setQ] = useState('')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<AskResult | null>(null)
-  const [reindexing, setReindexing] = useState(false)
   const [error, setError] = useState('')
   const isAdmin = getCurrentUser()?.role === 'admin'
 
+  // 重建索引（后台任务 + 进度轮询）
+  const [job, setJob] = useState<ReindexJob | null>(null)
+  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // API 配置卡
+  const [cfgOpen, setCfgOpen] = useState(false)
+  const [cfg, setCfg] = useState<LlmConfigView | null>(null)
+  const [cfgForm, setCfgForm] = useState({ apiKey: '', baseUrl: '', model: '' })
+  const [cfgSaving, setCfgSaving] = useState(false)
+  const [cfgMsg, setCfgMsg] = useState('')
+
   const loadStatus = () => api<KnowledgeStatus>('/knowledge/status').then(setStatus).catch(() => setStatus(null))
-  useEffect(() => { loadStatus() }, [])
+  useEffect(() => {
+    loadStatus()
+    api<LlmConfigView>('/knowledge/config').then((c) => {
+      setCfg(c)
+      setCfgForm({ apiKey: '', baseUrl: c.baseUrl, model: c.model })
+    }).catch(() => undefined)
+    // 进入页面时若后台正在重建，接上进度轮询
+    api<ReindexJob>('/knowledge/reindex/status').then((j) => {
+      if (j.running) { setJob(j); startPolling() }
+    }).catch(() => undefined)
+    return () => { if (pollTimer.current) clearInterval(pollTimer.current) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const startPolling = () => {
+    if (pollTimer.current) clearInterval(pollTimer.current)
+    pollTimer.current = setInterval(async () => {
+      try {
+        const j = await api<ReindexJob>('/knowledge/reindex/status')
+        setJob(j)
+        if (!j.running) {
+          if (pollTimer.current) clearInterval(pollTimer.current)
+          pollTimer.current = null
+          loadStatus()
+          if (!j.error) setTimeout(() => setJob(null), 4000) // 完成后停留 4 秒再收起
+        }
+      } catch { /* 网络抖动忽略，下轮再试 */ }
+    }, 1000)
+  }
 
   const ask = async () => {
     if (!q.trim() || loading) return
@@ -74,17 +128,43 @@ export default function Knowledge() {
   }
 
   const reindex = async () => {
-    if (reindexing) return
-    setReindexing(true)
+    if (job?.running) return
+    setError('')
     try {
-      await api('/knowledge/reindex', { method: 'POST' })
-      await loadStatus()
+      const j = await api<ReindexJob>('/knowledge/reindex', { method: 'POST' })
+      setJob(j)
+      startPolling()
     } catch {
-      setError('重建索引失败')
-    } finally {
-      setReindexing(false)
+      setError('重建索引启动失败')
     }
   }
+
+  const saveConfig = async () => {
+    if (cfgSaving) return
+    setCfgSaving(true)
+    setCfgMsg('')
+    try {
+      const saved = await api<LlmConfigView>('/knowledge/config', {
+        method: 'PUT',
+        body: JSON.stringify({
+          apiKey: cfgForm.apiKey || undefined, // 留空 = 不改动
+          baseUrl: cfgForm.baseUrl,
+          model: cfgForm.model,
+        }),
+      })
+      setCfg(saved)
+      setCfgForm((f) => ({ ...f, apiKey: '' }))
+      setCfgMsg('已保存')
+      loadStatus()
+      setTimeout(() => setCfgMsg(''), 3000)
+    } catch {
+      setCfgMsg('保存失败')
+    } finally {
+      setCfgSaving(false)
+    }
+  }
+
+  const reindexing = !!job?.running
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-6 space-y-5">
@@ -112,15 +192,115 @@ export default function Knowledge() {
               : <span className="text-neutral-400">未配置 Key，仅检索</span>}
           </span>
           {isAdmin && (
-            <button
-              onClick={reindex}
-              disabled={reindexing}
-              className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-neutral-200 px-3 py-1.5 text-[12px] text-neutral-600 hover:bg-neutral-50 disabled:opacity-50"
-            >
-              {reindexing ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-              {reindexing ? '重建中…' : '重建索引'}
-            </button>
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                onClick={() => setCfgOpen((v) => !v)}
+                className="inline-flex items-center gap-1.5 rounded-full border border-neutral-200 px-3 py-1.5 text-[12px] text-neutral-600 hover:bg-neutral-50"
+              >
+                <Settings2 size={13} /> API 配置 {cfgOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+              </button>
+              <button
+                onClick={reindex}
+                disabled={reindexing}
+                className="inline-flex items-center gap-1.5 rounded-full border border-neutral-200 px-3 py-1.5 text-[12px] text-neutral-600 hover:bg-neutral-50 disabled:opacity-50"
+              >
+                {reindexing ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                {reindexing ? '重建中…' : '重建索引'}
+              </button>
+            </div>
           )}
+        </div>
+      )}
+
+      {/* 重建进度条 */}
+      {job && (job.running || job.error || job.finishedAt) && (
+        <div className="rounded-2xl bg-white p-4 shadow-sm border border-neutral-100">
+          {job.running ? (
+            <>
+              <div className="flex justify-between text-[12px] text-neutral-500 mb-2">
+                <span>正在重建索引（{job.docs} 篇文档）…</span>
+                <span>{job.done} / {job.total || '…'}</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-neutral-100 overflow-hidden">
+                <div
+                  className="h-full bg-[#007AFF] transition-all duration-500"
+                  style={{ width: job.total ? `${Math.round((job.done / job.total) * 100)}%` : '8%' }}
+                />
+              </div>
+            </>
+          ) : job.error ? (
+            <div className="text-[13px] text-[#D70015]">重建失败：{job.error}</div>
+          ) : (
+            <div className="text-[13px] text-[#34C759]">重建完成：{job.docs} 篇文档、{job.done} 个切片</div>
+          )}
+        </div>
+      )}
+
+      {/* API 配置卡（管理员） */}
+      {isAdmin && cfgOpen && cfg && (
+        <div className="rounded-2xl bg-white p-5 shadow-sm border border-neutral-100 space-y-3">
+          <div className="text-[14px] font-medium text-neutral-900">大模型 API 配置</div>
+          <p className="text-[12px] text-neutral-500">
+            默认对接 DeepSeek（OpenAI 兼容协议）。填入 Key 后 AI 回答立即启用，无需重启。
+          </p>
+          <div>
+            <label className="text-[12px] text-neutral-500 block mb-1">API Key{cfg.apiKeySet && '（已配置，输入新值则更换）'}</label>
+            <input
+              type="password"
+              value={cfgForm.apiKey}
+              onChange={(e) => setCfgForm((f) => ({ ...f, apiKey: e.target.value }))}
+              placeholder={cfg.apiKeySet ? '••••••••' : 'sk-…'}
+              className="w-full rounded-xl bg-neutral-50 px-3.5 py-2.5 text-[13px] outline-none focus:bg-neutral-100"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[12px] text-neutral-500 block mb-1">接口地址</label>
+              <input
+                value={cfgForm.baseUrl}
+                onChange={(e) => setCfgForm((f) => ({ ...f, baseUrl: e.target.value }))}
+                className="w-full rounded-xl bg-neutral-50 px-3.5 py-2.5 text-[13px] outline-none focus:bg-neutral-100"
+              />
+            </div>
+            <div>
+              <label className="text-[12px] text-neutral-500 block mb-1">模型</label>
+              <input
+                value={cfgForm.model}
+                onChange={(e) => setCfgForm((f) => ({ ...f, model: e.target.value }))}
+                className="w-full rounded-xl bg-neutral-50 px-3.5 py-2.5 text-[13px] outline-none focus:bg-neutral-100"
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={saveConfig}
+              disabled={cfgSaving}
+              className="rounded-xl bg-[#007AFF] px-5 py-2.5 text-[13px] font-medium text-white disabled:opacity-40"
+            >
+              {cfgSaving ? '保存中…' : '保存'}
+            </button>
+            {cfg.apiKeySet && (
+              <button
+                onClick={async () => {
+                  if (cfgSaving) return
+                  setCfgSaving(true)
+                  try {
+                    const saved = await api<LlmConfigView>('/knowledge/config', { method: 'PUT', body: JSON.stringify({ clearApiKey: true }) })
+                    setCfg(saved)
+                    setCfgMsg('已清除 Key，AI 回答已停用')
+                    loadStatus()
+                    setTimeout(() => setCfgMsg(''), 3000)
+                  } finally {
+                    setCfgSaving(false)
+                  }
+                }}
+                className="text-[12px] text-neutral-400 hover:text-[#D70015]"
+              >
+                清除 Key
+              </button>
+            )}
+            {cfgMsg && <span className={`text-[12px] ${cfgMsg === '已保存' || cfgMsg.startsWith('已清除') ? 'text-[#34C759]' : 'text-[#D70015]'}`}>{cfgMsg}</span>}
+          </div>
         </div>
       )}
 
@@ -135,7 +315,7 @@ export default function Knowledge() {
         />
         <button
           onClick={ask}
-          disabled={loading || !q.trim()}
+          disabled={loading || !q.trim() || reindexing}
           className="inline-flex items-center gap-1.5 rounded-xl bg-[#007AFF] px-5 py-3 text-[14px] font-medium text-white disabled:opacity-40"
         >
           {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}

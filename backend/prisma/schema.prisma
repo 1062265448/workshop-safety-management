@@ -132,6 +132,14 @@ model Reminder {
   @@map("reminders")
 }
 
+/// 系统设置（键值对）：LLM 配置等可在页面上修改的项，优先于环境变量
+model Setting {
+  key   String @id
+  value String
+
+  @@map("settings")
+}
+
 /// 知识库文档（一条隐患 / 一份通报 / 一份规程 = 一个文档）
 model KnowledgeDoc {
   id        String   @id @default(cuid())
