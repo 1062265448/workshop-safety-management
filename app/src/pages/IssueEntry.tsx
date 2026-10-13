@@ -182,7 +182,7 @@ export default function IssueEntry() {
     }
   }
 
-  const inputCls = 'w-full px-3 py-2 rounded-lg bg-neutral-100/80 text-[14px] outline-none focus:ring-2 ring-[#007AFF]/30'
+  const inputCls = 'w-full px-3.5 py-2.5 rounded-xl bg-neutral-100/80 text-[14px] outline-none focus:ring-2 ring-[#007AFF]/30 transition-shadow'
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -205,91 +205,137 @@ export default function IssueEntry() {
       </div>
 
       {tab === 'manual' ? (
-        <section className="bg-white rounded-2xl p-6 shadow-sm space-y-4">
-          <div>
-            <label className="text-[13px] text-neutral-500 block mb-1.5">隐患标题 *</label>
-            <input className={inputCls} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="例如：配电箱箱门未关闭" />
-          </div>
-          <div>
-            <label className="text-[13px] text-neutral-500 block mb-1.5">问题描述</label>
-            <textarea className={`${inputCls} min-h-24`} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="位置、现状、风险说明…" />
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-4">
+          {/* 基本信息 */}
+          <section className="bg-white rounded-2xl p-6 shadow-sm space-y-5">
+            <h2 className="text-[13px] font-semibold text-neutral-400 tracking-wide">基本信息</h2>
             <div>
-              <label className="text-[13px] text-neutral-500 block mb-1.5">隐患类型</label>
-              <select className={inputCls} value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}>
-                <option value="">未分类</option>
-                {categories.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
+              <label className="text-[13px] text-neutral-500 block mb-1.5">隐患标题 *</label>
+              <input
+                className={inputCls}
+                value={form.title}
+                onChange={(e) => setForm({ ...form, title: e.target.value })}
+                placeholder="例如：配电箱箱门未关闭"
+              />
             </div>
             <div>
-              <label className="text-[13px] text-neutral-500 block mb-1.5">所在区域</label>
-              <select className={inputCls} value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}>
-                <option value="">未指定</option>
-                {locations.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
+              <label className="text-[13px] text-neutral-500 block mb-1.5">问题描述</label>
+              <textarea
+                className={`${inputCls} min-h-28`}
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                placeholder="位置、现状、风险说明…"
+              />
+            </div>
+          </section>
+
+          {/* 分类与等级 */}
+          <section className="bg-white rounded-2xl p-6 shadow-sm space-y-5">
+            <h2 className="text-[13px] font-semibold text-neutral-400 tracking-wide">分类与等级</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="text-[13px] text-neutral-500 block mb-1.5">隐患类型</label>
+                <select className={inputCls} value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}>
+                  <option value="">未分类</option>
+                  {categories.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[13px] text-neutral-500 block mb-1.5">所在区域</label>
+                <select className={inputCls} value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}>
+                  <option value="">成品车间（默认）</option>
+                  {locations.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
             </div>
             <div>
               <label className="text-[13px] text-neutral-500 block mb-1.5">风险等级</label>
-              <select className={inputCls} value={form.riskLevel} onChange={(e) => setForm({ ...form, riskLevel: e.target.value as RiskLevel })}>
-                {(['general', 'major', 'critical'] as const).map((r) => <option key={r} value={r}>{RISK_LABEL[r]}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="text-[13px] text-neutral-500 block mb-1.5">整改期限</label>
-              <input type="date" className={inputCls} value={form.deadline} onChange={(e) => setForm({ ...form, deadline: e.target.value })} />
-            </div>
-            <div className="sm:col-span-2">
-              <label className="text-[13px] text-neutral-500 block mb-1.5">整改责任人</label>
-              <input className={inputCls} value={form.assignee} onChange={(e) => setForm({ ...form, assignee: e.target.value })} placeholder="选填" />
-            </div>
-            {/* 现场照片 */}
-            <div className="sm:col-span-2">
-              <label className="text-[13px] text-neutral-500 block mb-1.5">现场照片</label>
-              <div className="flex flex-wrap gap-2">
-                {photoFiles.map((f, idx) => (
-                  <div key={idx} className="relative w-20 h-20 rounded-xl overflow-hidden bg-neutral-100">
-                    <img src={URL.createObjectURL(f)} alt="" className="w-full h-full object-cover" />
-                    <button
-                      onClick={() => setPhotoFiles(photoFiles.filter((_, i) => i !== idx))}
-                      className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/55 text-white flex items-center justify-center"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                ))}
-                {photoFiles.length < 9 && (
+              <div className="flex gap-1 bg-neutral-200/60 p-1 rounded-xl w-fit">
+                {([
+                  ['general', '#34C759'],
+                  ['major', '#FF9500'],
+                  ['critical', '#FF3B30'],
+                ] as const).map(([r, c]) => (
                   <button
-                    onClick={() => photoRef.current?.click()}
-                    className="w-20 h-20 rounded-xl border-2 border-dashed border-neutral-200 flex flex-col items-center justify-center gap-1 text-neutral-400 hover:border-[#007AFF]/50 hover:text-[#007AFF] transition-colors"
+                    key={r}
+                    onClick={() => setForm({ ...form, riskLevel: r })}
+                    className="px-5 py-1.5 rounded-lg text-[14px] transition-all"
+                    style={
+                      form.riskLevel === r
+                        ? { backgroundColor: 'white', color: c, fontWeight: 600, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }
+                        : { color: '#737373' }
+                    }
                   >
-                    <ImagePlus className="w-5 h-5" />
-                    <span className="text-[11px]">添加</span>
+                    {RISK_LABEL[r]}
                   </button>
-                )}
+                ))}
               </div>
-              <input
-                ref={photoRef} type="file" accept="image/*" multiple className="hidden"
-                onChange={(e) => {
-                  const picked = Array.from(e.target.files ?? [])
-                  setPhotoFiles((cur) => [...cur, ...picked].slice(0, 9))
-                  e.target.value = ''
-                }}
-              />
-              <p className="text-[11px] text-neutral-400 mt-1.5">最多 9 张，单张不超过 10MB</p>
             </div>
-          </div>
-          <div className="pt-2 flex justify-end">
+          </section>
+
+          {/* 期限与责任人 */}
+          <section className="bg-white rounded-2xl p-6 shadow-sm space-y-5">
+            <h2 className="text-[13px] font-semibold text-neutral-400 tracking-wide">整改安排</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="text-[13px] text-neutral-500 block mb-1.5">整改期限</label>
+                <input type="date" className={inputCls} value={form.deadline} onChange={(e) => setForm({ ...form, deadline: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-[13px] text-neutral-500 block mb-1.5">整改责任人</label>
+                <input className={inputCls} value={form.assignee} onChange={(e) => setForm({ ...form, assignee: e.target.value })} placeholder="选填" />
+              </div>
+            </div>
+          </section>
+
+          {/* 现场照片 */}
+          <section className="bg-white rounded-2xl p-6 shadow-sm space-y-4">
+            <h2 className="text-[13px] font-semibold text-neutral-400 tracking-wide">现场照片</h2>
+            <div className="flex flex-wrap gap-3">
+              {photoFiles.map((f, idx) => (
+                <div key={idx} className="relative w-24 h-24 rounded-2xl overflow-hidden bg-neutral-100">
+                  <img src={URL.createObjectURL(f)} alt="" className="w-full h-full object-cover" />
+                  <button
+                    onClick={() => setPhotoFiles(photoFiles.filter((_, i) => i !== idx))}
+                    className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-black/55 text-white flex items-center justify-center"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+              {photoFiles.length < 9 && (
+                <button
+                  onClick={() => photoRef.current?.click()}
+                  className="w-24 h-24 rounded-2xl border-2 border-dashed border-neutral-200 flex flex-col items-center justify-center gap-1 text-neutral-400 hover:border-[#007AFF]/50 hover:text-[#007AFF] transition-colors"
+                >
+                  <ImagePlus className="w-6 h-6" />
+                  <span className="text-[11px]">添加照片</span>
+                </button>
+              )}
+            </div>
+            <input
+              ref={photoRef} type="file" accept="image/*" multiple className="hidden"
+              onChange={(e) => {
+                const picked = Array.from(e.target.files ?? [])
+                setPhotoFiles((cur) => [...cur, ...picked].slice(0, 9))
+                e.target.value = ''
+              }}
+            />
+            <p className="text-[11px] text-neutral-400">最多 9 张，单张不超过 10MB</p>
+          </section>
+
+          {/* 提交 */}
+          <div className="flex justify-end pb-2">
             <button
               onClick={submitManual}
               disabled={!form.title.trim() || submitting}
-              className="px-5 py-2 rounded-full bg-[#007AFF] text-white text-[14px] font-medium disabled:opacity-40 hover:bg-[#0066D6] transition-colors flex items-center gap-2"
+              className="px-8 py-2.5 rounded-full bg-[#007AFF] text-white text-[15px] font-medium disabled:opacity-40 hover:bg-[#0066D6] transition-colors flex items-center gap-2"
             >
               {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
               {submitting ? '上传中…' : '登记入库'}
             </button>
           </div>
-        </section>
+        </div>
       ) : (
         <section className="bg-white rounded-2xl p-6 shadow-sm space-y-4">
           {/* 上传区 */}

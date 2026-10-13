@@ -4,9 +4,15 @@ const prisma = new PrismaClient()
 
 async function main() {
   // 内置标签
-  const categories = ['电气安全', '消防安全', '机械设备', '危化品', '作业环境', '防护用具']
+  // 隐患类型：与《镍冶炼厂事故隐患内部分类统计标准明细》sheet1 的 20 个标准分类一致
+  const categories = [
+    '设备设施', '电气设施', '防护设施', '起重设备及设施', '仪器仪表',
+    '压力容器及管道', '联锁闭锁急停', '生产组织及行为管控', '工艺技术及环境保护', '危化品及红区管理',
+    '作业环境及文明生产', '作业通道及标志标识', '车辆及运输管理', '内部检修', '外来施工',
+    '制度规程记录管理', '消防应急管理', '教育培训管理', '职业健康及劳动防护', '其它',
+  ]
   const locations = ['一号车间', '二号车间', '装配线', '仓库', '配电房']
-  const palette = ['#007AFF', '#FF9500', '#FF3B30', '#AF52DE', '#34C759', '#5AC8FA']
+  const palette = ['#007AFF', '#FF9500', '#FF3B30', '#AF52DE', '#34C759', '#5856D6', '#5AC8FA', '#FFCC00', '#FF2D55', '#64D2FF']
 
   const tagCount = await prisma.tag.count()
   if (tagCount === 0) {

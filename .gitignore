@@ -31,3 +31,4 @@ pdf-qa/
 .DS_Store
 Thumbs.db
 *.log
+wsms-backup-*.dump
