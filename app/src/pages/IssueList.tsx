@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { CheckCircle2, ChevronLeft, ChevronRight, Circle, ImagePlus, Search, Trash2, X } from 'lucide-react'
 import { isOverdue, uploadPhotos, useStore } from '@/lib/store'
+import { TEAMS, countGridOwners } from '@/lib/config'
 import { fmtDate, fmtDateTime } from '@/lib/format'
 import { RISK_LABEL, RiskBadge, SOURCE_LABEL, STATUS_LABEL, StatusBadge } from '@/components/badges'
 import { RELEVANCE_BADGE } from '@/pages/Annotations'
@@ -36,6 +37,7 @@ export default function IssueList() {
   const [editForm, setEditForm] = useState({
     title: '', description: '', categoryId: '', locationId: '',
     riskLevel: 'general' as SafetyIssue['riskLevel'], assignee: '', deadline: '', fixNote: '',
+    team: '', gridOperator: '', gridOwner: '', systemOwner: '', systemCause: '',
   })
   /** 复查间隔编辑草稿（天） */
   const [intervalDraft, setIntervalDraft] = useState('')
@@ -43,6 +45,9 @@ export default function IssueList() {
   const categories = tags.filter((t) => t.group === 'category')
   const locations = tags.filter((t) => t.group === 'location')
   const tagName = (id?: string) => tags.find((t) => t.id === id)?.name
+
+  /** 网格责任人重复统计：同一责任人在成品车间隐患中出现 ≥2 次时专门提醒 */
+  const gridOwnerCounts = useMemo(() => countGridOwners(issues), [issues])
 
   const filtered = useMemo(
     () =>
@@ -112,6 +117,11 @@ export default function IssueList() {
       assignee: issue.assignee ?? '',
       deadline: issue.deadline ? fmtDate(issue.deadline) : '',
       fixNote: issue.fixNote ?? '',
+      team: issue.team ?? '',
+      gridOperator: issue.gridOperator ?? '',
+      gridOwner: issue.gridOwner ?? '',
+      systemOwner: issue.systemOwner ?? '',
+      systemCause: issue.systemCause ?? '',
     })
     setEditing(true)
   }
@@ -128,6 +138,11 @@ export default function IssueList() {
       assignee: (editForm.assignee.trim() || null) as SafetyIssue['assignee'],
       deadline: (editForm.deadline ? new Date(editForm.deadline).toISOString() : null) as SafetyIssue['deadline'],
       fixNote: (editForm.fixNote.trim() || null) as SafetyIssue['fixNote'],
+      team: (editForm.team || null) as SafetyIssue['team'],
+      gridOperator: (editForm.gridOperator.trim() || null) as SafetyIssue['gridOperator'],
+      gridOwner: (editForm.gridOwner.trim() || null) as SafetyIssue['gridOwner'],
+      systemOwner: (editForm.systemOwner.trim() || null) as SafetyIssue['systemOwner'],
+      systemCause: (editForm.systemCause.trim() || null) as SafetyIssue['systemCause'],
     })
     setEditing(false)
   }
@@ -223,6 +238,15 @@ export default function IssueList() {
                 })()}
                 <RiskBadge level={i.riskLevel} />
                 <StatusBadge status={i.status} overdue={isOverdue(i)} />
+                {/* 网格责任人重复提醒：≥2 次出现的专门标红 */}
+                {i.gridOwner && (gridOwnerCounts.get(i.gridOwner.trim()) ?? 0) >= 2 && (
+                  <span
+                    className="px-2 py-0.5 rounded-md text-[12px] font-medium bg-[#FF3B30]/10 text-[#D70015]"
+                    title={`网格责任人「${i.gridOwner.trim()}」已在 ${gridOwnerCounts.get(i.gridOwner.trim())} 条成品车间隐患中重复出现，建议专项分析`}
+                  >
+                    责任人重复 ×{gridOwnerCounts.get(i.gridOwner.trim())}
+                  </span>
+                )}
                 <span className="text-[11px] text-neutral-400">{SOURCE_LABEL[i.source]}</span>
               </div>
               {i.description && <p className="text-[13px] text-neutral-500 line-clamp-1">{i.description}</p>}
@@ -365,6 +389,32 @@ export default function IssueList() {
                   <span className="text-neutral-400 text-[12px]">整改责任人</span>
                   <input className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] outline-none" value={editForm.assignee} onChange={(e) => setEditForm({ ...editForm, assignee: e.target.value })} />
                 </label>
+                <label className="space-y-1">
+                  <span className="text-neutral-400 text-[12px]">责任班组</span>
+                  <select className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] outline-none" value={editForm.team} onChange={(e) => setEditForm({ ...editForm, team: e.target.value })}>
+                    <option value="">未指定</option>
+                    {TEAMS.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </label>
+                <label className="space-y-1">
+                  <span className="text-neutral-400 text-[12px]">网格主操手</span>
+                  <input className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] outline-none" value={editForm.gridOperator} onChange={(e) => setEditForm({ ...editForm, gridOperator: e.target.value })} />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-neutral-400 text-[12px]">网格责任人</span>
+                  <input className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] outline-none" value={editForm.gridOwner} onChange={(e) => setEditForm({ ...editForm, gridOwner: e.target.value })} />
+                  {editForm.gridOwner.trim() && (gridOwnerCounts.get(editForm.gridOwner.trim()) ?? 0) >= 1 && editForm.gridOwner.trim() !== (detailIssue.gridOwner ?? '') && (
+                    <span className="text-[11px] text-[#D70015]">该责任人已在其他 {gridOwnerCounts.get(editForm.gridOwner.trim())} 条隐患中出现，保存后将触发重复提醒</span>
+                  )}
+                </label>
+                <label className="space-y-1">
+                  <span className="text-neutral-400 text-[12px]">系统责任人</span>
+                  <input className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] outline-none" value={editForm.systemOwner} onChange={(e) => setEditForm({ ...editForm, systemOwner: e.target.value })} />
+                </label>
+                <label className="space-y-1 col-span-2">
+                  <span className="text-neutral-400 text-[12px]">系统原因</span>
+                  <textarea className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] outline-none min-h-14" value={editForm.systemCause} onChange={(e) => setEditForm({ ...editForm, systemCause: e.target.value })} placeholder="管理、制度、流程层面的根因分析…" />
+                </label>
                 <label className="space-y-1 col-span-2">
                   <span className="text-neutral-400 text-[12px]">整改记录</span>
                   <textarea className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] outline-none min-h-16" value={editForm.fixNote} onChange={(e) => setEditForm({ ...editForm, fixNote: e.target.value })} placeholder="选填" />
@@ -379,9 +429,36 @@ export default function IssueList() {
               {tagName(detailIssue.locationId) && <div><dt className="text-neutral-400 text-[12px]">所在区域</dt><dd className="mt-0.5">{tagName(detailIssue.locationId)}</dd></div>}
               <div><dt className="text-neutral-400 text-[12px]">风险等级</dt><dd className="mt-0.5">{RISK_LABEL[detailIssue.riskLevel]}</dd></div>
               {detailIssue.assignee && <div><dt className="text-neutral-400 text-[12px]">整改责任人</dt><dd className="mt-0.5">{detailIssue.assignee}</dd></div>}
+              {detailIssue.team && <div><dt className="text-neutral-400 text-[12px]">责任班组</dt><dd className="mt-0.5">{detailIssue.team}</dd></div>}
+              {detailIssue.gridOperator && <div><dt className="text-neutral-400 text-[12px]">网格主操手</dt><dd className="mt-0.5">{detailIssue.gridOperator}</dd></div>}
+              {detailIssue.gridOwner && (
+                <div>
+                  <dt className="text-neutral-400 text-[12px]">网格责任人</dt>
+                  <dd className={`mt-0.5 ${(gridOwnerCounts.get(detailIssue.gridOwner.trim()) ?? 0) >= 2 ? 'text-[#D70015] font-medium' : ''}`}>
+                    {detailIssue.gridOwner}
+                    {(gridOwnerCounts.get(detailIssue.gridOwner.trim()) ?? 0) >= 2 && `（重复 ×${gridOwnerCounts.get(detailIssue.gridOwner.trim())}）`}
+                  </dd>
+                </div>
+              )}
+              {detailIssue.systemOwner && <div><dt className="text-neutral-400 text-[12px]">系统责任人</dt><dd className="mt-0.5">{detailIssue.systemOwner}</dd></div>}
               {detailIssue.reporter && <div><dt className="text-neutral-400 text-[12px]">排查人</dt><dd className="mt-0.5">{detailIssue.reporter}</dd></div>}
               {detailIssue.sourceFile && <div className="col-span-2 sm:col-span-3"><dt className="text-neutral-400 text-[12px]">来源文件</dt><dd className="mt-0.5 break-all">{detailIssue.sourceFile}</dd></div>}
             </dl>
+            )}
+
+            {/* 系统原因 */}
+            {!editing && detailIssue.systemCause && (
+              <div className="rounded-xl bg-[#5856D6]/6 border border-[#5856D6]/15 p-3.5">
+                <div className="text-[12px] text-[#5856D6] font-medium mb-1">系统原因</div>
+                <p className="text-[13px] text-neutral-600 leading-relaxed whitespace-pre-wrap">{detailIssue.systemCause}</p>
+              </div>
+            )}
+
+            {/* 网格责任人重复提醒：≥2 次出现，醒目提示专项分析 */}
+            {!editing && detailIssue.gridOwner && (gridOwnerCounts.get(detailIssue.gridOwner.trim()) ?? 0) >= 2 && (
+              <div className="rounded-xl bg-[#FF3B30]/8 border border-[#FF3B30]/20 p-3.5 text-[13px] text-[#D70015] leading-relaxed">
+                网格责任人「{detailIssue.gridOwner.trim()}」已在 {gridOwnerCounts.get(detailIssue.gridOwner.trim())} 条成品车间隐患中重复出现，建议对其负责网格开展专项排查与原因分析。
+              </div>
             )}
 
             {/* 整改记录 */}

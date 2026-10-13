@@ -52,6 +52,16 @@ export interface SafetyIssue {
   recheckRequired: number
   /** 已完成复查的时间 ISO 列表 */
   rechecks: string[]
+  /** 责任班组（成品车间：控运班/机组班/加工班/职能组） */
+  team?: string
+  /** 网格主操手 */
+  gridOperator?: string
+  /** 网格责任人（同一责任人 ≥2 次出现会有重复提醒） */
+  gridOwner?: string
+  /** 系统责任人 */
+  systemOwner?: string
+  /** 系统原因分析 */
+  systemCause?: string
   createdAt: string
   updatedAt: string
 }

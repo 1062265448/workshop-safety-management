@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { FileUp, Loader2, CheckSquare, Square, ClipboardCheck, ImagePlus, X } from 'lucide-react'
 import { uploadPhotos, useStore } from '@/lib/store'
-import { isManagedWorkshop } from '@/lib/config'
+import { isManagedWorkshop, TEAMS, countGridOwners } from '@/lib/config'
 import { detectSource, parseFileOffthread, type SkippedPage } from '@/lib/import/parsers'
 import { matchReview } from '@/lib/import/matchReview'
 import { RISK_LABEL } from '@/components/badges'
@@ -17,6 +17,7 @@ export default function IssueEntry() {
   const [form, setForm] = useState({
     title: '', description: '', locationId: '', categoryId: '',
     riskLevel: 'general' as RiskLevel, assignee: '', deadline: '',
+    team: '', gridOperator: '', gridOwner: '', systemOwner: '', systemCause: '',
   })
   /** 待上传的现场照片（本地 File，提交时统一上传） */
   const [photoFiles, setPhotoFiles] = useState<File[]>([])
@@ -24,6 +25,8 @@ export default function IssueEntry() {
   const photoRef = useRef<HTMLInputElement>(null)
   const categories = tags.filter((t) => t.group === 'category')
   const locations = tags.filter((t) => t.group === 'location')
+  /** 网格责任人重复统计：录入时同名即时提醒 */
+  const gridOwnerCounts = countGridOwners(issues)
 
   const submitManual = async () => {
     if (!form.title.trim() || submitting) return
@@ -44,6 +47,11 @@ export default function IssueEntry() {
         source: 'manual',
         reporter: '当前用户',
         assignee: form.assignee || undefined,
+        team: form.team || undefined,
+        gridOperator: form.gridOperator.trim() || undefined,
+        gridOwner: form.gridOwner.trim() || undefined,
+        systemOwner: form.systemOwner.trim() || undefined,
+        systemCause: form.systemCause.trim() || undefined,
         foundAt: new Date().toISOString(),
         deadline: form.deadline ? new Date(form.deadline).toISOString() : undefined,
         photos,
@@ -285,6 +293,46 @@ export default function IssueEntry() {
                 <label className="text-[13px] text-neutral-500 block mb-1.5">整改责任人</label>
                 <input className={inputCls} value={form.assignee} onChange={(e) => setForm({ ...form, assignee: e.target.value })} placeholder="选填" />
               </div>
+            </div>
+          </section>
+
+          {/* 责任落实 */}
+          <section className="bg-white rounded-2xl p-6 shadow-sm space-y-5">
+            <h2 className="text-[13px] font-semibold text-neutral-400 tracking-wide">责任落实（选填）</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="text-[13px] text-neutral-500 block mb-1.5">责任班组</label>
+                <select className={inputCls} value={form.team} onChange={(e) => setForm({ ...form, team: e.target.value })}>
+                  <option value="">未指定</option>
+                  {TEAMS.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[13px] text-neutral-500 block mb-1.5">网格主操手</label>
+                <input className={inputCls} value={form.gridOperator} onChange={(e) => setForm({ ...form, gridOperator: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-[13px] text-neutral-500 block mb-1.5">网格责任人</label>
+                <input className={inputCls} value={form.gridOwner} onChange={(e) => setForm({ ...form, gridOwner: e.target.value })} />
+                {form.gridOwner.trim() && (gridOwnerCounts.get(form.gridOwner.trim()) ?? 0) >= 1 && (
+                  <p className="text-[12px] text-[#D70015] mt-1.5">
+                    该责任人已在 {gridOwnerCounts.get(form.gridOwner.trim())} 条成品车间隐患中出现，本条登记后将触发重复提醒
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="text-[13px] text-neutral-500 block mb-1.5">系统责任人</label>
+                <input className={inputCls} value={form.systemOwner} onChange={(e) => setForm({ ...form, systemOwner: e.target.value })} />
+              </div>
+            </div>
+            <div>
+              <label className="text-[13px] text-neutral-500 block mb-1.5">系统原因</label>
+              <textarea
+                className={`${inputCls} min-h-20`}
+                value={form.systemCause}
+                onChange={(e) => setForm({ ...form, systemCause: e.target.value })}
+                placeholder="管理、制度、流程层面的根因分析…"
+              />
             </div>
           </section>
 

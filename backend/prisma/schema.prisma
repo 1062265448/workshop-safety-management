@@ -40,6 +40,16 @@ model Issue {
   recheckRequired    Int     @default(3)
   /// 已完成复查的时间 ISO 列表
   rechecks           String[] @default([])
+  /// 责任落实（成品车间）：责任班组（控运班/机组班/加工班/职能组）
+  team          String?
+  /// 网格主操手
+  gridOperator  String?
+  /// 网格责任人（同一责任人出现 2 次及以上前端会重复提醒）
+  gridOwner     String?
+  /// 系统责任人
+  systemOwner   String?
+  /// 系统原因分析
+  systemCause   String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
