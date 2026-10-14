@@ -124,6 +124,9 @@ export default function IssueEntry() {
   const [reviews, setReviews] = useState<ReviewDraft[]>([])
   const [skipped, setSkipped] = useState<SkippedPage[]>([])
   const [parseError, setParseError] = useState('')
+  /** 导入查重：每条草稿与库中既有隐患的疑似重复命中（按草稿 key） */
+  const [dupByKey, setDupByKey] = useState<Record<string, SimilarCase[]>>({})
+  const [dupOpen, setDupOpen] = useState<string | null>(null)
 
   /** 按风险等级的默认整改期限（天） */
   const DEADLINE_DAYS: Record<RiskLevel, number> = { critical: 3, major: 7, general: 15 }
@@ -168,6 +171,23 @@ export default function IssueEntry() {
       setDrafts(withTags)
       setReviews(withMatch)
       setSkipped(parsedSkipped)
+      // 导入查重：草稿全部入暂存区后，批量比对库中既有隐患，疑似重复的标记出来（不阻断导入，后台完成）
+      setDupByKey({})
+      setDupOpen(null)
+      api<{ ready: boolean; results: SimilarCase[][] }>('/knowledge/similar-batch', {
+        method: 'POST',
+        body: JSON.stringify({ texts: withTags.map((d) => `${d.title}\n${d.description}`), limit: 2 }),
+      })
+        .then((res) => {
+          if (!res.ready) return
+          const map: Record<string, SimilarCase[]> = {}
+          withTags.forEach((d, i) => {
+            const hits = (res.results[i] ?? []).filter((x) => x.score >= 0.35)
+            if (hits.length) map[d.key] = hits
+          })
+          setDupByKey(map)
+        })
+        .catch(() => {})
     } catch (e) {
       setParseError(e instanceof Error ? e.message : '解析失败')
     } finally {
@@ -230,6 +250,8 @@ export default function IssueEntry() {
       setReviews([])
       setSkipped([])
       setSourceFile(null)
+      setDupByKey({})
+      setDupOpen(null)
       navigate('/issues')
     } catch (e) {
       // 照片上传/入库失败要让用户看见原因，不能默默卡死
@@ -588,6 +610,34 @@ export default function IssueEntry() {
                             {(['general', 'major', 'critical'] as const).map((r) => <option key={r} value={r}>{RISK_LABEL[r]}</option>)}
                           </select>
                         </div>
+                        {/* 疑似重复：与库中既有隐患高度相似，入库前请人工核对是否同一问题 */}
+                        {dupByKey[d.key]?.map((hit) => {
+                          const hitIssue = issues.find((i) => i.id === hit.issueId)
+                          const open = dupOpen === `${d.key}:${hit.issueId}`
+                          return (
+                            <div key={hit.issueId} className="rounded-lg bg-[#FF9500]/8 border border-[#FF9500]/25 px-2.5 py-1.5">
+                              <button
+                                onClick={() => setDupOpen(open ? null : `${d.key}:${hit.issueId}`)}
+                                className="w-full flex items-center gap-1.5 text-left text-[12px] text-[#B25000]"
+                              >
+                                {open ? <ChevronDown className="w-3 h-3 shrink-0" /> : <ChevronRight className="w-3 h-3 shrink-0" />}
+                                <span className="truncate flex-1">疑似重复：{hit.title}</span>
+                                <span className="shrink-0">{Math.round(hit.score * 100)}%</span>
+                                {hitIssue && <StatusBadge status={hitIssue.status} />}
+                              </button>
+                              {open && hitIssue && (
+                                <div className="mt-1.5 pt-1.5 border-t border-[#FF9500]/20 space-y-1 text-[12px] text-neutral-500">
+                                  {hitIssue.description && <p>{hitIssue.description}</p>}
+                                  {hitIssue.fixNote && <p className="text-[#248A3D]">整改措施：{hitIssue.fixNote}</p>}
+                                  <p className="text-neutral-400">
+                                    {hitIssue.foundAt.slice(0, 10)} 发现 · {hitIssue.scope === 'managed' ? '成品车间 · 纳入闭环' : '其他车间 · 仅参考'}
+                                    {hitIssue.sourceFile ? ` · 来源：${hitIssue.sourceFile}` : ''}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
                       </div>
                     </li>
                   )

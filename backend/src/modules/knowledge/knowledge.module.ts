@@ -247,15 +247,9 @@ export class KnowledgeService {
     return rows.map((r) => ({ ...r, score: Number(r.score) }))
   }
 
-  /** 录入联动：与待录入文本最相似的既有隐患（仅案例库，按隐患去重取最高分段）
-   *  纯向量对小库区分度不足（22 条隐患向量分挤在 0.05 区间内），
-   *  混合检索：0.65×向量余弦 + 0.35×标题/内容字符二元组 Jaccard，专名命中才能排到前面 */
-  async similarIssues(text: string, limit = 3) {
-    const query = (text ?? '').trim()
-    if (!query) return { ready: this.embedding.ready, items: [] }
-    if (!this.embedding.ready) return { ready: false, items: [] }
-    const [vec] = await this.embedding.embed([query], true)
-    const rows = await this.prisma.$queryRawUnsafe<
+  /** 向量近邻候选（仅案例库，取前 12 条切片） */
+  private async issueCandidates(vec: number[]) {
+    return this.prisma.$queryRawUnsafe<
       { issueId: string | null; title: string; content: string; score: number }[]
     >(
       `SELECT d."refId" AS "issueId", d.title, c.content,
@@ -263,10 +257,18 @@ export class KnowledgeService {
        FROM knowledge_chunks c JOIN knowledge_docs d ON d.id = c."docId"
        WHERE c.embedding IS NOT NULL AND d.kind = 'issue'
        ORDER BY c.embedding <=> $1::vector
-       LIMIT $2`,
+       LIMIT 12`,
       `[${vec.join(',')}]`,
-      12,
     )
+  }
+
+  /** 混合打分：0.65×向量余弦 + 0.35×标题/内容字符二元组 Jaccard（标题权重更高），按隐患去重 */
+  private hybridRank(
+    query: string,
+    vec: number[],
+    rows: { issueId: string | null; title: string; content: string; score: number }[],
+    limit: number,
+  ) {
     const qBi = bigrams(query)
     const best = new Map<string, { issueId: string; title: string; score: number; vec: number; snippet: string }>()
     for (const r of rows) {
@@ -274,7 +276,6 @@ export class KnowledgeService {
       const vecScore = Number(r.score)
       const cur = best.get(r.issueId)
       if (!cur || vecScore > cur.vec) {
-        // 标题权重高于内容：标题命中二元组更能说明是同类问题
         const lex = Math.max(
           jaccard(qBi, bigrams(r.title)),
           jaccard(qBi, bigrams(r.title + r.title + r.content)),
@@ -288,8 +289,38 @@ export class KnowledgeService {
         })
       }
     }
-    const items = [...best.values()].sort((a, b) => b.score - a.score).slice(0, limit)
+    return [...best.values()].sort((a, b) => b.score - a.score).slice(0, limit)
+  }
+
+  /** 录入联动：与待录入文本最相似的既有隐患（仅案例库，按隐患去重取最高分段）
+   *  纯向量对小库区分度不足（22 条隐患向量分挤在 0.05 区间内），
+   *  混合检索：0.65×向量余弦 + 0.35×标题/内容字符二元组 Jaccard，专名命中才能排到前面 */
+  async similarIssues(text: string, limit = 3) {
+    const query = (text ?? '').trim()
+    if (!query) return { ready: this.embedding.ready, items: [] }
+    if (!this.embedding.ready) return { ready: false, items: [] }
+    const [vec] = await this.embedding.embed([query], true)
+    const rows = await this.issueCandidates(vec)
+    const items = this.hybridRank(query, vec, rows, limit)
     return { ready: true, items }
+  }
+
+  /** 导入暂存区批量查重：一次嵌入多条草稿文本，逐条向量近邻 + 混合打分 */
+  async similarBatch(texts: string[], limit = 2) {
+    const queries = (texts ?? []).map((t) => (t ?? '').trim()).slice(0, 50)
+    if (queries.length === 0) return { ready: this.embedding.ready, results: [] }
+    if (!this.embedding.ready) return { ready: false, results: queries.map(() => []) }
+    const vecs = await this.embedding.embed(queries, true)
+    const results = [] as { issueId: string; title: string; score: number; vec: number; snippet: string }[][]
+    for (let i = 0; i < queries.length; i++) {
+      if (!queries[i]) {
+        results.push([])
+        continue
+      }
+      const rows = await this.issueCandidates(vecs[i])
+      results.push(this.hybridRank(queries[i], vecs[i], rows, limit))
+    }
+    return { ready: true, results }
   }
 }
 
@@ -342,6 +373,12 @@ export class KnowledgeController {
   @Post('similar')
   similar(@Body() body: { text?: string; limit?: number }) {
     return this.svc.similarIssues(body?.text ?? '', body?.limit ? Number(body.limit) : 3)
+  }
+
+  /** 导入暂存区批量查重：一次提交多条草稿文本，逐条返回相似既有隐患 */
+  @Post('similar-batch')
+  similarBatch(@Body() body: { texts?: string[]; limit?: number }) {
+    return this.svc.similarBatch(body?.texts ?? [], body?.limit ? Number(body.limit) : 2)
   }
 
   /** AI 问答：先检索，配上 LLM 则生成回答；未配置 Key 时只返回检索结果（优雅降级） */
