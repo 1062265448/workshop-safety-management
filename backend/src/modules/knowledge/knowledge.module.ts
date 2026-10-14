@@ -76,6 +76,20 @@ async function extractPptxSlides(filePath: string): Promise<string[]> {
   return slides
 }
 
+// 字符二元组集合（中文按字切，专名/术语重叠用 Jaccard 衡量）
+function bigrams(s: string): Set<string> {
+  const clean = (s ?? '').replace(/\s+/g, '')
+  const set = new Set<string>()
+  for (let i = 0; i < clean.length - 1; i++) set.add(clean.slice(i, i + 2))
+  return set
+}
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (!a.size || !b.size) return 0
+  let inter = 0
+  for (const x of a) if (b.has(x)) inter++
+  return inter / (a.size + b.size - inter)
+}
+
 @Injectable()
 export class KnowledgeService {
   private job: ReindexJob = { running: false, total: 0, done: 0, docs: 0, error: '', finishedAt: null }
@@ -232,6 +246,51 @@ export class KnowledgeService {
     )
     return rows.map((r) => ({ ...r, score: Number(r.score) }))
   }
+
+  /** 录入联动：与待录入文本最相似的既有隐患（仅案例库，按隐患去重取最高分段）
+   *  纯向量对小库区分度不足（22 条隐患向量分挤在 0.05 区间内），
+   *  混合检索：0.65×向量余弦 + 0.35×标题/内容字符二元组 Jaccard，专名命中才能排到前面 */
+  async similarIssues(text: string, limit = 3) {
+    const query = (text ?? '').trim()
+    if (!query) return { ready: this.embedding.ready, items: [] }
+    if (!this.embedding.ready) return { ready: false, items: [] }
+    const [vec] = await this.embedding.embed([query], true)
+    const rows = await this.prisma.$queryRawUnsafe<
+      { issueId: string | null; title: string; content: string; score: number }[]
+    >(
+      `SELECT d."refId" AS "issueId", d.title, c.content,
+              1 - (c.embedding <=> $1::vector) AS score
+       FROM knowledge_chunks c JOIN knowledge_docs d ON d.id = c."docId"
+       WHERE c.embedding IS NOT NULL AND d.kind = 'issue'
+       ORDER BY c.embedding <=> $1::vector
+       LIMIT $2`,
+      `[${vec.join(',')}]`,
+      12,
+    )
+    const qBi = bigrams(query)
+    const best = new Map<string, { issueId: string; title: string; score: number; vec: number; snippet: string }>()
+    for (const r of rows) {
+      if (!r.issueId) continue
+      const vecScore = Number(r.score)
+      const cur = best.get(r.issueId)
+      if (!cur || vecScore > cur.vec) {
+        // 标题权重高于内容：标题命中二元组更能说明是同类问题
+        const lex = Math.max(
+          jaccard(qBi, bigrams(r.title)),
+          jaccard(qBi, bigrams(r.title + r.title + r.content)),
+        )
+        best.set(r.issueId, {
+          issueId: r.issueId,
+          title: r.title,
+          score: 0.65 * vecScore + 0.35 * lex,
+          vec: vecScore,
+          snippet: r.content.slice(0, 150),
+        })
+      }
+    }
+    const items = [...best.values()].sort((a, b) => b.score - a.score).slice(0, limit)
+    return { ready: true, items }
+  }
 }
 
 @Controller('knowledge')
@@ -277,6 +336,12 @@ export class KnowledgeController {
   @Get('search')
   search(@Query('q') q: string, @Query('limit') limit?: string) {
     return this.svc.search(q ?? '', limit ? Number(limit) : 8)
+  }
+
+  /** 录入联动：与待录入问题最相似的既有隐患（登录即可用，结果按隐患去重） */
+  @Post('similar')
+  similar(@Body() body: { text?: string; limit?: number }) {
+    return this.svc.similarIssues(body?.text ?? '', body?.limit ? Number(body.limit) : 3)
   }
 
   /** AI 问答：先检索，配上 LLM 则生成回答；未配置 Key 时只返回检索结果（优雅降级） */
