@@ -11,8 +11,9 @@ export class IssuesController {
     @Query('categoryId') categoryId?: string,
     @Query('locationId') locationId?: string,
     @Query('q') q?: string,
+    @Query('bin') bin?: string,
   ) {
-    return this.svc.findAll({ status, categoryId, locationId, q })
+    return this.svc.findAll({ status, categoryId, locationId, q, bin: bin === '1' })
   }
 
   @Get(':id')
@@ -35,13 +36,26 @@ export class IssuesController {
     return this.svc.recheck(id)
   }
 
+  /** 回收站恢复 */
+  @Post(':id/restore')
+  restore(@Param('id') id: string) {
+    return this.svc.restore(id)
+  }
+
   @Patch(':id')
   update(@Param('id') id: string, @Body() body: Record<string, unknown>) {
     return this.svc.update(id, body)
   }
 
+  /** 软删除：进回收站，可恢复 */
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.svc.remove(id)
+  }
+
+  /** 彻底删除：仅回收站中的条目，不可恢复 */
+  @Delete(':id/hard')
+  hardRemove(@Param('id') id: string) {
+    return this.svc.hardRemove(id)
   }
 }

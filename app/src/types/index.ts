@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 /** 风险等级（枚举字段，决定默认整改时限） */
-export type RiskLevel = 'general' | 'major' | 'critical'
+export type RiskLevel = 'general' | 'critical' | 'immediate'
 
 /** 隐患状态机：待整改 → 整改中 → 待复查 → 已闭环；逾期由 deadline 推导 */
 export type IssueStatus = 'pending' | 'fixing' | 'review' | 'closed'
@@ -62,6 +62,8 @@ export interface SafetyIssue {
   systemOwner?: string
   /** 系统原因分析 */
   systemCause?: string
+  /** 回收站：删除时间 ISO（有值表示已删除，可恢复） */
+  deletedAt?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -76,6 +78,8 @@ export interface Tag {
   color: string
   /** 内置标签不可删除 */
   builtin: boolean
+  /** 子标签：父标签 id（仅 category 组使用） */
+  parentId?: string | null
 }
 
 /** 检查频率 */

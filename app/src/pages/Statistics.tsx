@@ -50,7 +50,7 @@ export default function Statistics() {
       .sort((a, b) => b.数量 - a.数量)
 
     // 风险等级
-    const byRisk = (['general', 'major', 'critical'] as RiskLevel[]).map((r) => ({
+    const byRisk = (['immediate', 'general', 'critical'] as RiskLevel[]).map((r) => ({
       name: RISK_LABEL[r], value: inPeriod.filter((i) => i.riskLevel === r).length,
     }))
 
@@ -162,7 +162,7 @@ export default function Statistics() {
           <ul className="space-y-2.5">
             {data.byRisk.map((r, idx) => {
               const total = Math.max(1, data.total)
-              const key = (['general', 'major', 'critical'] as RiskLevel[])[idx]
+              const key = (['immediate', 'general', 'critical'] as RiskLevel[])[idx]
               return (
                 <li key={r.name}>
                   <div className="flex justify-between text-[13px] mb-1">
@@ -172,7 +172,7 @@ export default function Statistics() {
                   <div className="h-1.5 rounded-full bg-neutral-100 overflow-hidden">
                     <div
                       className={`h-full rounded-full ${RISK_COLOR[key].split(' ')[0].replace('/12', '')}`}
-                      style={{ width: `${(r.value / total) * 100}%`, backgroundColor: ['#34C759', '#FF9500', '#FF3B30'][idx] }}
+                      style={{ width: `${(r.value / total) * 100}%`, backgroundColor: ['#007AFF', '#34C759', '#FF3B30'][idx] }}
                     />
                   </div>
                 </li>

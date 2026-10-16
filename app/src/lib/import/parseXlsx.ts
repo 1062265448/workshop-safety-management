@@ -20,7 +20,7 @@ const HEADER_MAP: Array<[RegExp, 'title' | 'description' | 'location' | 'categor
   [/^(等级|风险等级|风险)$/, 'risk'],
 ]
 
-const RISK_FROM_TEXT: Record<string, RiskLevel> = { 一般: 'general', 较大: 'major', 重大: 'critical' }
+const RISK_FROM_TEXT: Record<string, RiskLevel> = { 一般: 'general', 重大: 'critical', 较大: 'general', 即知即改: 'immediate' }
 
 export async function parseXlsx(file: File): Promise<IssueDraft[]> {
   const wb = XLSX.read(await file.arrayBuffer())

@@ -129,9 +129,6 @@ const CATEGORY_RULES: Array<[RegExp, string]> = [
 /** 三违（违章行为）关键词：文件名含"三违"时优先适用 */
 const SANWEI_RE = /警戒区|未佩戴|未放下|未系挂|徒手|吊臂|纠偏|违章|互保联保|酒后|安全帽|安全带|摘钩|面屏/
 
-/** 高风险作业关键词 → 较大风险 */
-const MAJOR_RE = /红区|高处|吊装|动火|受限空间|临时用电|交叉作业|未加装|未采取|失效|断裂|触电|防爆|灼烫|迸溅/
-
 function cleanParagraph(s: string): string {
   return s
     .replace(/\s+/g, ' ') // 折叠空白
@@ -189,7 +186,7 @@ function guessCategory(text: string, sanwei: boolean): string | undefined {
 
 function guessRisk(text: string): RiskLevel {
   if (/重大|红区|火灾|爆炸/.test(text)) return 'critical'
-  if (MAJOR_RE.test(text)) return 'major'
+  if (/即知即改|现场纠偏|当场整改|立即整改|现场已|已现场/.test(text)) return 'immediate'
   return 'general'
 }
 

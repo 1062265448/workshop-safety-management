@@ -128,8 +128,8 @@ export default function IssueEntry() {
   const [dupByKey, setDupByKey] = useState<Record<string, SimilarCase[]>>({})
   const [dupOpen, setDupOpen] = useState<string | null>(null)
 
-  /** 按风险等级的默认整改期限（天） */
-  const DEADLINE_DAYS: Record<RiskLevel, number> = { critical: 3, major: 7, general: 15 }
+  /** 按风险等级的默认整改期限（天）：即知即改当天 */
+  const DEADLINE_DAYS: Record<RiskLevel, number> = { critical: 3, general: 15, immediate: 0 }
 
   const onPickFile = async (file: File) => {
     const source = detectSource(file.name)
@@ -383,8 +383,8 @@ export default function IssueEntry() {
               <label className="text-[13px] text-neutral-500 block mb-1.5">风险等级</label>
               <div className="flex gap-1 bg-neutral-200/60 p-1 rounded-xl w-fit">
                 {([
+                  ['immediate', '#007AFF'],
                   ['general', '#34C759'],
-                  ['major', '#FF9500'],
                   ['critical', '#FF3B30'],
                 ] as const).map(([r, c]) => (
                   <button
@@ -607,7 +607,7 @@ export default function IssueEntry() {
                             value={d.riskLevel}
                             onChange={(e) => patchDraft({ riskLevel: e.target.value as RiskLevel })}
                           >
-                            {(['general', 'major', 'critical'] as const).map((r) => <option key={r} value={r}>{RISK_LABEL[r]}</option>)}
+                            {(['immediate', 'general', 'critical'] as const).map((r) => <option key={r} value={r}>{RISK_LABEL[r]}</option>)}
                           </select>
                         </div>
                         {/* 疑似重复：与库中既有隐患高度相似，入库前请人工核对是否同一问题 */}
@@ -694,7 +694,7 @@ export default function IssueEntry() {
               )}
 
               <div className="flex items-center justify-end gap-3 pt-1">
-                <span className="text-[12px] text-neutral-400">整改期限按风险等级默认：重大 3 天 / 较大 7 天 / 一般 15 天</span>
+                <span className="text-[12px] text-neutral-400">整改期限按风险等级默认：重大 3 天 / 一般 15 天 / 即知即改当天</span>
                 <button
                   onClick={confirmImport}
                   disabled={importing}

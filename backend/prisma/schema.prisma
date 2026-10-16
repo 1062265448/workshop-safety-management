@@ -50,6 +50,8 @@ model Issue {
   systemOwner   String?
   /// 系统原因分析
   systemCause   String?
+  /// 回收站：删除时间（null=正常；有值=已删除可恢复，查询默认排除）
+  deletedAt   DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -82,6 +84,8 @@ model Tag {
   group   String // category | location | custom
   color   String  @default("#007AFF")
   builtin Boolean @default(false)
+  /// 子标签：指向父标签 id（仅 category 组使用；删除父标签时子标签级联删除）
+  parentId String?
 
   @@unique([name, group])
   @@map("tags")

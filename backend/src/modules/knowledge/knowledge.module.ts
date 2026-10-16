@@ -125,7 +125,7 @@ export class KnowledgeService {
 
     // 1. 隐患案例库（最有价值：每条都带整改措施与复查记录）
     const [issues, tags, annotations] = await Promise.all([
-      this.prisma.issue.findMany({ orderBy: { foundAt: 'desc' } }),
+      this.prisma.issue.findMany({ where: { deletedAt: null }, orderBy: { foundAt: 'desc' } }),
       this.prisma.tag.findMany(),
       this.prisma.issueAnnotation.findMany(),
     ])

@@ -4,7 +4,7 @@ import { Module } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../prisma.service'
 
-const WRITABLE = ['name', 'group', 'color'] as const
+const WRITABLE = ['name', 'group', 'color', 'parentId'] as const
 
 function pick(body: Record<string, unknown>): Prisma.TagUncheckedCreateInput {
   const data: Record<string, unknown> = {}
@@ -35,8 +35,17 @@ export class TagsService {
     }
   }
 
-  create(body: Record<string, unknown>) {
-    return this.guardUnique(() => this.prisma.tag.create({ data: pick(body) }), String(body.name ?? ''))
+  /** 创建标签；带 parentId 时为子标签——维度组跟随父标签，颜色缺省继承父标签 */
+  async create(body: Record<string, unknown>) {
+    const data = pick(body)
+    if (data.parentId) {
+      const parent = await this.prisma.tag.findUnique({ where: { id: String(data.parentId) } })
+      if (!parent) throw new NotFoundException(`父标签 ${data.parentId} 不存在`)
+      if (parent.parentId) throw new NotFoundException('子标签不能再有子标签')
+      data.group = parent.group
+      if (!body.color) data.color = parent.color
+    }
+    return this.guardUnique(() => this.prisma.tag.create({ data }), String(body.name ?? ''))
   }
 
   /** 幂等建档：按 名称+维度组 查找，不存在则创建（导入解析自动建档用） */
@@ -60,15 +69,18 @@ export class TagsService {
     )
   }
 
-  /** 内置标签不可删除；删除时清理问题上的引用 */
+  /** 内置标签不可删除；删除时清理问题上的引用；父标签删除时子标签级联删除 */
   async remove(id: string) {
     const tag = await this.prisma.tag.findUnique({ where: { id } })
     if (!tag) throw new NotFoundException(`Tag ${id} not found`)
     if (tag.builtin) throw new NotFoundException('内置标签不可删除')
+    const children = await this.prisma.tag.findMany({ where: { parentId: id } })
+    const ids = [id, ...children.map((c) => c.id)]
     await this.prisma.$transaction([
-      this.prisma.$executeRaw`UPDATE issues SET "tagIds" = array_remove("tagIds", ${id}) WHERE ${id} = ANY("tagIds")`,
-      this.prisma.issue.updateMany({ where: { categoryId: id }, data: { categoryId: null } }),
-      this.prisma.issue.updateMany({ where: { locationId: id }, data: { locationId: null } }),
+      ...ids.map((tid) => this.prisma.$executeRaw`UPDATE issues SET "tagIds" = array_remove("tagIds", ${tid}) WHERE ${tid} = ANY("tagIds")`),
+      this.prisma.issue.updateMany({ where: { categoryId: { in: ids } }, data: { categoryId: null } }),
+      this.prisma.issue.updateMany({ where: { locationId: { in: ids } }, data: { locationId: null } }),
+      this.prisma.tag.deleteMany({ where: { parentId: id } }),
       this.prisma.tag.delete({ where: { id } }),
     ])
     return { ok: true }

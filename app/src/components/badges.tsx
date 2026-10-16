@@ -1,11 +1,11 @@
 import type { IssueSource, IssueStatus, RiskLevel } from '@/types'
 import { cn } from '@/lib/utils'
 
-export const RISK_LABEL: Record<RiskLevel, string> = { general: '一般', major: '较大', critical: '重大' }
+export const RISK_LABEL: Record<RiskLevel, string> = { general: '一般', critical: '重大', immediate: '即知即改' }
 export const RISK_COLOR: Record<RiskLevel, string> = {
   general: 'bg-[#34C759]/12 text-[#248A3D]',
-  major: 'bg-[#FF9500]/12 text-[#C93400]',
   critical: 'bg-[#FF3B30]/12 text-[#D70015]',
+  immediate: 'bg-[#007AFF]/12 text-[#007AFF]',
 }
 
 export const STATUS_LABEL: Record<IssueStatus, string> = { pending: '待整改', fixing: '整改中', review: '待复查', closed: '已闭环' }

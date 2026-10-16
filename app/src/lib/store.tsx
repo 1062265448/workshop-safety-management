@@ -24,6 +24,12 @@ interface Store extends State {
   /** 记录一次防复发复查（成品车间隐患要求至少 recheckRequired 次） */
   recheckIssue: (id: string) => void
   removeIssue: (id: string) => void
+  /** 回收站：拉取已删除列表 */
+  fetchBin: () => Promise<SafetyIssue[]>
+  /** 回收站：恢复 */
+  restoreIssue: (id: string) => void
+  /** 回收站：彻底删除（不可恢复） */
+  hardDeleteIssue: (id: string) => void
   addTag: (tag: Omit<Tag, 'id' | 'builtin'>) => void
   /** 幂等建档：存在返回已有标签，不存在则创建（导入自动建档用） */
   ensureTag: (name: string, group: Tag['group']) => Promise<Tag | undefined>
@@ -165,10 +171,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }),
       removeIssue: (id) =>
         run(async () => {
+          // 软删除：进回收站，标注保留可恢复
           await api(`/issues/${id}`, { method: 'DELETE' })
           setState((p) => ({
             ...p,
             issues: p.issues.filter((i) => i.id !== id),
+          }))
+        }),
+      /** 回收站列表（已软删除的隐患） */
+      fetchBin: () => api<SafetyIssue[]>('/issues?bin=1'),
+      restoreIssue: (id) =>
+        run(async () => {
+          const restored = await api<SafetyIssue>(`/issues/${id}/restore`, { method: 'POST' })
+          setState((p) => ({ ...p, issues: [restored, ...p.issues] }))
+        }),
+      hardDeleteIssue: (id) =>
+        run(async () => {
+          await api(`/issues/${id}/hard`, { method: 'DELETE' })
+          setState((p) => ({
+            ...p,
             annotations: p.annotations.filter((a) => a.issueId !== id),
           }))
         }),

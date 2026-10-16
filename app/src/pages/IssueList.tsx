@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import { CheckCircle2, ChevronLeft, ChevronRight, Circle, ImagePlus, Search, Trash2, X } from 'lucide-react'
+import { CheckCircle2, ChevronLeft, ChevronRight, Circle, ImagePlus, RotateCcw, Search, Trash2, X } from 'lucide-react'
 import { isOverdue, uploadPhotos, useStore } from '@/lib/store'
 import { TEAMS, countGridOwners, gridOwnerTier } from '@/lib/config'
 import { fmtDate, fmtDateTime } from '@/lib/format'
@@ -15,12 +15,18 @@ const NEXT_ACTION: Partial<Record<IssueStatus, { label: string; to: IssueStatus 
 }
 
 export default function IssueList() {
-  const { issues, tags, annotations, updateIssue, removeIssue, recheckIssue } = useStore()
+  const { issues, tags, annotations, updateIssue, removeIssue, recheckIssue, fetchBin, restoreIssue, hardDeleteIssue } = useStore()
   const [q, setQ] = useState('')
   const [status, setStatus] = useState<IssueStatus | ''>('')
   const [categoryId, setCategoryId] = useState('')
   const [locationId, setLocationId] = useState('')
   const [scope, setScope] = useState<'' | 'managed' | 'reference'>('managed')
+  /** 回收站弹窗 */
+  const [binOpen, setBinOpen] = useState(false)
+  const [binItems, setBinItems] = useState<SafetyIssue[]>([])
+  const [binLoading, setBinLoading] = useState(false)
+  /** 待二次确认彻底删除的隐患 id */
+  const [pendingHardDeleteId, setPendingHardDeleteId] = useState<string | null>(null)
   /** 待二次确认删除的隐患 id（内联确认，不用原生 confirm，兼容内嵌浏览器） */
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   /** 大图查看：当前隐患 id + 照片下标 */
@@ -163,6 +169,34 @@ export default function IssueList() {
     setIntervalDraft(String(v))
   }
 
+  /** 打开回收站并拉取已删除条目 */
+  const openBin = async () => {
+    setBinOpen(true)
+    setBinLoading(true)
+    try {
+      setBinItems(await fetchBin())
+    } finally {
+      setBinLoading(false)
+    }
+  }
+
+  const handleRestore = async (id: string) => {
+    restoreIssue(id)
+    setBinItems((cur) => cur.filter((i) => i.id !== id))
+  }
+
+  /** 彻底删除（两段式确认，不可恢复） */
+  const confirmHardDelete = (issue: SafetyIssue) => {
+    if (pendingHardDeleteId === issue.id) {
+      hardDeleteIssue(issue.id)
+      setBinItems((cur) => cur.filter((i) => i.id !== issue.id))
+      setPendingHardDeleteId(null)
+    } else {
+      setPendingHardDeleteId(issue.id)
+      setTimeout(() => setPendingHardDeleteId((cur) => (cur === issue.id ? null : cur)), 3000)
+    }
+  }
+
   const selectCls = 'px-3 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] outline-none'
 
   return (
@@ -173,16 +207,25 @@ export default function IssueList() {
       </header>
 
       {/* 范围页签：成品车间（闭环管理）/ 其他车间（参考） */}
-      <div className="flex gap-1 bg-neutral-200/60 p-1 rounded-xl w-fit">
-        {([['managed', '成品车间'], ['reference', '其他车间（参考）'], ['', '全部']] as const).map(([key, label]) => (
-          <button
-            key={key}
-            onClick={() => setScope(key)}
-            className={`px-4 py-1.5 rounded-lg text-[13px] transition-colors ${scope === key ? 'bg-white shadow-sm font-medium' : 'text-neutral-500'}`}
-          >
-            {label}
-          </button>
-        ))}
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex gap-1 bg-neutral-200/60 p-1 rounded-xl w-fit">
+          {([['managed', '成品车间'], ['reference', '其他车间（参考）'], ['', '全部']] as const).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setScope(key)}
+              className={`px-4 py-1.5 rounded-lg text-[13px] transition-colors ${scope === key ? 'bg-white shadow-sm font-medium' : 'text-neutral-500'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={openBin}
+          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-white border border-neutral-200 text-[13px] text-neutral-500 hover:text-[#007AFF] hover:border-[#007AFF]/40 transition-colors"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+          回收站
+        </button>
       </div>
 
       {/* 筛选栏 */}
@@ -259,6 +302,7 @@ export default function IssueList() {
               {i.description && <p className="text-[13px] text-neutral-500 line-clamp-1">{i.description}</p>}
               <div className="text-[12px] text-neutral-400 flex gap-3 flex-wrap">
                 <span>发现 {fmtDate(i.foundAt)}</span>
+                <span>录入 {fmtDate(i.createdAt)}</span>
                 {i.deadline && <span>期限 {fmtDate(i.deadline)}</span>}
                 {tagName(i.categoryId) && <span>类型 · {tagName(i.categoryId)}</span>}
                 {tagName(i.locationId) && <span>区域 · {tagName(i.locationId)}</span>}
@@ -385,7 +429,7 @@ export default function IssueList() {
                 <label className="space-y-1">
                   <span className="text-neutral-400 text-[12px]">风险等级</span>
                   <select className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] outline-none" value={editForm.riskLevel} onChange={(e) => setEditForm({ ...editForm, riskLevel: e.target.value as SafetyIssue['riskLevel'] })}>
-                    {(['general', 'major', 'critical'] as const).map((r) => <option key={r} value={r}>{RISK_LABEL[r]}</option>)}
+                    {(['immediate', 'general', 'critical'] as const).map((r) => <option key={r} value={r}>{RISK_LABEL[r]}</option>)}
                   </select>
                 </label>
                 <label className="space-y-1">
@@ -433,6 +477,7 @@ export default function IssueList() {
             ) : (
             <dl className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3 text-[13px] bg-neutral-50 rounded-xl p-4">
               <div><dt className="text-neutral-400 text-[12px]">发现时间</dt><dd className="mt-0.5">{fmtDateTime(detailIssue.foundAt)}</dd></div>
+              <div><dt className="text-neutral-400 text-[12px]">录入时间</dt><dd className="mt-0.5">{fmtDateTime(detailIssue.createdAt)}</dd></div>
               {detailIssue.deadline && <div><dt className="text-neutral-400 text-[12px]">整改期限</dt><dd className="mt-0.5">{fmtDate(detailIssue.deadline)}</dd></div>}
               {detailIssue.closedAt && <div><dt className="text-neutral-400 text-[12px]">闭环时间</dt><dd className="mt-0.5">{fmtDateTime(detailIssue.closedAt)}</dd></div>}
               {tagName(detailIssue.categoryId) && <div><dt className="text-neutral-400 text-[12px]">隐患类型</dt><dd className="mt-0.5">{tagName(detailIssue.categoryId)}</dd></div>}
@@ -611,6 +656,66 @@ export default function IssueList() {
                 </button>
               )}
             </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 回收站弹窗 */}
+      {binOpen && (
+        <div className="fixed inset-0 z-40 bg-black/40 flex items-center justify-center p-4" onClick={() => { setBinOpen(false); setPendingHardDeleteId(null) }}>
+          <div
+            className="bg-white rounded-2xl shadow-xl w-full max-w-xl max-h-[80vh] overflow-y-auto p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-[17px] font-semibold">回收站</h2>
+                <p className="text-[12px] text-neutral-400 mt-0.5">删除的隐患在此保留，可恢复；彻底删除后不可找回</p>
+              </div>
+              <button onClick={() => { setBinOpen(false); setPendingHardDeleteId(null) }} className="p-1.5 text-neutral-400 hover:text-neutral-700 transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {binLoading ? (
+              <p className="text-[13px] text-neutral-400 py-8 text-center">加载中…</p>
+            ) : binItems.length === 0 ? (
+              <p className="text-[13px] text-neutral-400 py-8 text-center">回收站是空的</p>
+            ) : (
+              <ul className="divide-y divide-neutral-100">
+                {binItems.map((i) => (
+                  <li key={i.id} className="py-3 flex items-start gap-3">
+                    <div className="flex-1 min-w-0 space-y-1">
+                      <div className="text-[14px] font-medium leading-snug">{i.title}</div>
+                      <div className="text-[12px] text-neutral-400 flex gap-3 flex-wrap">
+                        <span>删除于 {fmtDateTime(i.deletedAt!)}</span>
+                        {tagName(i.categoryId) && <span>类型 · {tagName(i.categoryId)}</span>}
+                        <span>{RISK_LABEL[i.riskLevel]}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => handleRestore(i.id)}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-[#007AFF]/10 text-[#007AFF] text-[12px] font-medium hover:bg-[#007AFF]/18 transition-colors"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        恢复
+                      </button>
+                      <button
+                        onClick={() => confirmHardDelete(i)}
+                        className={
+                          pendingHardDeleteId === i.id
+                            ? 'px-3 py-1.5 rounded-full bg-[#FF3B30] text-white text-[12px] font-medium'
+                            : 'px-3 py-1.5 rounded-full text-[#FF3B30] text-[12px] hover:bg-[#FF3B30]/8 transition-colors'
+                        }
+                      >
+                        {pendingHardDeleteId === i.id ? '确认彻底删除' : '彻底删除'}
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         </div>

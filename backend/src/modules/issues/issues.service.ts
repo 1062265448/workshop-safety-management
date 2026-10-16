@@ -26,8 +26,10 @@ function pick(body: Record<string, unknown>): Prisma.IssueUncheckedCreateInput {
 export class IssuesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  findAll(filters: { status?: string; categoryId?: string; locationId?: string; q?: string }) {
+  findAll(filters: { status?: string; categoryId?: string; locationId?: string; q?: string; bin?: boolean }) {
     const where: Prisma.IssueWhereInput = {}
+    // 回收站：默认只查正常条目；bin=1 时只查已删除条目
+    where.deletedAt = filters.bin ? { not: null } : null
     if (filters.status) where.status = filters.status
     if (filters.categoryId) where.categoryId = filters.categoryId
     if (filters.locationId) where.locationId = filters.locationId
@@ -76,7 +78,7 @@ export class IssuesService {
     const name = gridOwner?.trim()
     if (!name) return
     const count = await this.prisma.issue.count({
-      where: { scope: 'managed', gridOwner: name },
+      where: { scope: 'managed', gridOwner: name, deletedAt: null },
     })
     const refId = `gridowner:${name}`
     if (count < 2) {
@@ -109,12 +111,30 @@ export class IssuesService {
     return updated
   }
 
+  /** 软删除：进回收站（标注保留），可从回收站恢复 */
   async remove(id: string) {
     const issue = await this.prisma.issue.findUnique({ where: { id } })
-    // 级联清理：参考件标注随隐患一并删除
+    if (!issue) throw new NotFoundException(`Issue ${id} not found`)
+    const updated = await this.prisma.issue.update({ where: { id }, data: { deletedAt: new Date() } })
+    await this.refreshGridOwnerReminder(issue.gridOwner)
+    return updated
+  }
+
+  /** 回收站恢复 */
+  async restore(id: string) {
+    const issue = await this.prisma.issue.findUnique({ where: { id } })
+    if (!issue) throw new NotFoundException(`Issue ${id} not found`)
+    const updated = await this.prisma.issue.update({ where: { id }, data: { deletedAt: null } })
+    await this.refreshGridOwnerReminder(issue.gridOwner)
+    return updated
+  }
+
+  /** 彻底删除：仅限回收站中的条目；级联清理标注，不可恢复 */
+  async hardRemove(id: string) {
+    const issue = await this.prisma.issue.findUnique({ where: { id } })
+    if (!issue) throw new NotFoundException(`Issue ${id} not found`)
+    if (!issue.deletedAt) throw new NotFoundException('该隐患不在回收站中，不能彻底删除')
     await this.prisma.issueAnnotation.deleteMany({ where: { issueId: id } })
-    const deleted = await this.prisma.issue.delete({ where: { id } })
-    await this.refreshGridOwnerReminder(issue?.gridOwner)
-    return deleted
+    return this.prisma.issue.delete({ where: { id } })
   }
 }

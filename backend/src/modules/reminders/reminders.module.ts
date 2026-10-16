@@ -23,9 +23,9 @@ export class RemindersService {
   async refresh() {
     const now = new Date()
 
-    // 整改超期：仅成品车间（managed）未闭环且 deadline 已过；参考件不催办
+    // 整改超期：仅成品车间（managed）未闭环且 deadline 已过；参考件不催办；回收站条目不催办
     const overdue = await this.prisma.issue.findMany({
-      where: { status: { not: 'closed' }, scope: 'managed', deadline: { lt: now } },
+      where: { status: { not: 'closed' }, scope: 'managed', deletedAt: null, deadline: { lt: now } },
     })
     for (const issue of overdue) {
       await this.prisma.reminder.upsert({
@@ -51,7 +51,7 @@ export class RemindersService {
 
     // 防复发复查到点：成品车间隐患，未完成规定次数，下一次复查时间已过
     // 复查节奏：发现时间 + 第 N 次 × 间隔天数（默认 7 天，可按隐患编辑）
-    const recheckIssues = await this.prisma.issue.findMany({ where: { scope: 'managed' } })
+    const recheckIssues = await this.prisma.issue.findMany({ where: { scope: 'managed', deletedAt: null } })
     let recheckHits = 0
     for (const issue of recheckIssues) {
       const done = issue.rechecks.length

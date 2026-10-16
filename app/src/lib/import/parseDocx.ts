@@ -8,11 +8,10 @@ import type { IssueDraft, RiskLevel } from '@/types'
 // ─────────────────────────────────────────────────────────────
 
 const PROBLEM_RE = /不符合《|存在[^。]{0,40}(风险|隐患)/
-const MAJOR_RE = /红区|高处|吊装|动火|受限空间|临时用电|交叉作业|未加装|未采取|失效|断裂/
 
 function guessRisk(text: string): RiskLevel {
   if (/重大|红区|火灾|爆炸/.test(text)) return 'critical'
-  if (MAJOR_RE.test(text)) return 'major'
+  if (/即知即改|现场纠偏|当场整改|立即整改|现场已|已现场/.test(text)) return 'immediate'
   return 'general'
 }
 
