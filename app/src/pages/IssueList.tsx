@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { CheckCircle2, ChevronLeft, ChevronRight, Circle, ImagePlus, RotateCcw, Search, Trash2, X } from 'lucide-react'
 import { isOverdue, uploadPhotos, useStore } from '@/lib/store'
-import { TEAMS, countGridOwners, gridOwnerTier } from '@/lib/config'
+import { TEAMS, countGridOwners, gridOwnerTier, withSubTags } from '@/lib/config'
 import { fmtDate, fmtDateTime } from '@/lib/format'
 import { RISK_LABEL, RiskBadge, SOURCE_LABEL, STATUS_LABEL, StatusBadge } from '@/components/badges'
 import { RELEVANCE_BADGE } from '@/pages/Annotations'
@@ -50,7 +50,16 @@ export default function IssueList() {
 
   const categories = tags.filter((t) => t.group === 'category')
   const locations = tags.filter((t) => t.group === 'location')
-  const tagName = (id?: string) => tags.find((t) => t.id === id)?.name
+  /** 标签显示名：子标签带父标签前缀（如「电气设施 · 电缆破损」） */
+  const tagName = (id?: string) => {
+    const t = tags.find((t) => t.id === id)
+    if (!t) return undefined
+    if (t.parentId) {
+      const p = tags.find((x) => x.id === t.parentId)
+      if (p) return `${p.name} · ${t.name}`
+    }
+    return t.name
+  }
 
   /** 网格责任人重复统计：同一责任人在成品车间隐患中出现 ≥2 次时专门提醒 */
   const gridOwnerCounts = useMemo(() => countGridOwners(issues), [issues])
@@ -240,7 +249,9 @@ export default function IssueList() {
         </select>
         <select className={selectCls} value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
           <option value="">全部类型</option>
-          {categories.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          {withSubTags(categories).map(({ tag, depth }) => (
+            <option key={tag.id} value={tag.id}>{depth ? `　└ ${tag.name}` : tag.name}</option>
+          ))}
         </select>
         <select className={selectCls} value={locationId} onChange={(e) => setLocationId(e.target.value)}>
           <option value="">全部区域</option>
@@ -416,7 +427,9 @@ export default function IssueList() {
                   <span className="text-neutral-400 text-[12px]">隐患类型</span>
                   <select className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] outline-none" value={editForm.categoryId} onChange={(e) => setEditForm({ ...editForm, categoryId: e.target.value })}>
                     <option value="">未分类</option>
-                    {categories.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    {withSubTags(categories).map(({ tag, depth }) => (
+                      <option key={tag.id} value={tag.id}>{depth ? `　└ ${tag.name}` : tag.name}</option>
+                    ))}
                   </select>
                 </label>
                 <label className="space-y-1">

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { FileUp, Loader2, CheckSquare, Square, ClipboardCheck, ImagePlus, X, ChevronDown, ChevronRight } from 'lucide-react'
 import { uploadPhotos, useStore } from '@/lib/store'
-import { isManagedWorkshop, TEAMS, countGridOwners } from '@/lib/config'
+import { isManagedWorkshop, TEAMS, countGridOwners, withSubTags } from '@/lib/config'
 import { detectSource, parseFileOffthread, type SkippedPage } from '@/lib/import/parsers'
 import { matchReview } from '@/lib/import/matchReview'
 import { RISK_LABEL, RiskBadge, StatusBadge } from '@/components/badges'
@@ -368,7 +368,9 @@ export default function IssueEntry() {
                 <label className="text-[13px] text-neutral-500 block mb-1.5">隐患类型</label>
                 <select className={inputCls} value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}>
                   <option value="">未分类</option>
-                  {categories.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  {withSubTags(categories).map(({ tag, depth }) => (
+                    <option key={tag.id} value={tag.id}>{depth ? `　└ ${tag.name}` : tag.name}</option>
+                  ))}
                 </select>
               </div>
               <div>
@@ -592,7 +594,9 @@ export default function IssueEntry() {
                             onChange={(e) => patchDraft({ categoryId: e.target.value || undefined })}
                           >
                             <option value="">{d.categoryGuess ? `类型（猜测：${d.categoryGuess}）` : '类型'}</option>
-                            {categories.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                            {withSubTags(categories).map(({ tag, depth }) => (
+                              <option key={tag.id} value={tag.id}>{depth ? `　└ ${tag.name}` : tag.name}</option>
+                            ))}
                           </select>
                           <select
                             className="text-[12px] bg-neutral-100 rounded-md px-2 py-1 outline-none"

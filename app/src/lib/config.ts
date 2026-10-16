@@ -25,3 +25,13 @@ export function gridOwnerTier(count: number): 'warn' | 'severe' | null {
   if (count >= 2) return 'warn'
   return null
 }
+
+/** 将标签按父子关系展开：父标签后紧跟其子标签（下拉框分组排列用），depth=1 为子标签 */
+export function withSubTags<T extends { id: string; parentId?: string | null }>(tags: T[]): Array<{ tag: T; depth: number }> {
+  const out: Array<{ tag: T; depth: number }> = []
+  for (const p of tags.filter((t) => !t.parentId)) {
+    out.push({ tag: p, depth: 0 })
+    for (const c of tags.filter((t) => t.parentId === p.id)) out.push({ tag: c, depth: 1 })
+  }
+  return out
+}
