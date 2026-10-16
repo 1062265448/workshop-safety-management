@@ -381,12 +381,13 @@ export class KnowledgeController {
     return this.svc.similarBatch(body?.texts ?? [], body?.limit ? Number(body.limit) : 2)
   }
 
-  /** AI 问答：先检索，配上 LLM 则生成回答；未配置 Key 时只返回检索结果（优雅降级） */
+  /** AI 问答：先检索，配上 LLM 则生成回答；未配置 Key 时只返回检索结果（优雅降级）
+   *  检索取 15 条：库内隐患已 200+，取太少会漏掉同类别下的多数记录 */
   @Post('ask')
   async ask(@Body() body: { question?: string }) {
     const question = (body?.question ?? '').trim()
     if (!question) throw new BadRequestException('请输入问题')
-    const hits = await this.svc.search(question, 5)
+    const hits = await this.svc.search(question, 15)
     const answer = hits.length > 0 ? await this.llm.answer(question, hits) : null
     return { answer, hits, llmConfigured: await this.llm.isConfigured(), model: (await this.llm.getConfig()).model }
   }
