@@ -1,9 +1,11 @@
 import { Module } from '@nestjs/common'
 import { PrismaService } from '../../prisma.service'
+import { KnowledgeModule } from '../knowledge/knowledge.module'
 import { IssuesController } from './issues.controller'
 import { IssuesService } from './issues.service'
 
 @Module({
+  imports: [KnowledgeModule],
   controllers: [IssuesController],
   providers: [IssuesService, PrismaService],
 })

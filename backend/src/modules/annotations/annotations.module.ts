@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Module, NotFoundException, Param, Put } from '@nestjs/common'
 import { Injectable } from '@nestjs/common'
 import { PrismaService } from '../../prisma.service'
+import { KnowledgeModule, KnowledgeService } from '../knowledge/knowledge.module'
 
 // ─────────────────────────────────────────────────────────────
 // 参考件问题标注：评估其他车间问题对成品车间的参考意义
@@ -11,7 +12,10 @@ const RELEVANCE = new Set(['high', 'medium', 'low'])
 
 @Injectable()
 export class AnnotationsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly knowledge: KnowledgeService,
+  ) {}
 
   findAll() {
     return this.prisma.issueAnnotation.findMany({ orderBy: { updatedAt: 'desc' } })
@@ -33,15 +37,19 @@ export class AnnotationsService {
       caution: (body.caution ?? '').trim(),
       tagId,
     }
-    return this.prisma.issueAnnotation.upsert({
+    const saved = await this.prisma.issueAnnotation.upsert({
       where: { issueId },
       create: { issueId, ...data },
       update: data,
     })
+    void this.knowledge.syncIssues([issueId]) // 参考意义写进知识库文档
+    return saved
   }
 
-  remove(issueId: string) {
-    return this.prisma.issueAnnotation.deleteMany({ where: { issueId } })
+  async remove(issueId: string) {
+    const removed = await this.prisma.issueAnnotation.deleteMany({ where: { issueId } })
+    void this.knowledge.syncIssues([issueId]) // 标注删除同步移除文档中的参考意义段
+    return removed
   }
 }
 
@@ -66,6 +74,7 @@ export class AnnotationsController {
 }
 
 @Module({
+  imports: [KnowledgeModule],
   controllers: [AnnotationsController],
   providers: [AnnotationsService, PrismaService],
 })

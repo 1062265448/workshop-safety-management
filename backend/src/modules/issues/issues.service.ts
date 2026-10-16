@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../prisma.service'
+import { KnowledgeService } from '../knowledge/knowledge.module'
 
 /** 允许客户端写入的字段白名单 */
 const WRITABLE = [
@@ -24,7 +25,10 @@ function pick(body: Record<string, unknown>): Prisma.IssueUncheckedCreateInput {
 
 @Injectable()
 export class IssuesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly knowledge: KnowledgeService,
+  ) {}
 
   findAll(filters: { status?: string; categoryId?: string; locationId?: string; q?: string; bin?: boolean }) {
     const where: Prisma.IssueWhereInput = {}
@@ -51,6 +55,7 @@ export class IssuesService {
   create(body: Record<string, unknown>) {
     return this.prisma.issue.create({ data: pick(body) }).then(async (issue) => {
       await this.refreshGridOwnerReminder(issue.gridOwner)
+      void this.knowledge.syncIssues([issue.id]) // 增量索引：新问题实时进知识库
       return issue
     })
   }
@@ -58,6 +63,7 @@ export class IssuesService {
   createBatch(items: Record<string, unknown>[]) {
     return this.prisma.$transaction(items.map((item) => this.prisma.issue.create({ data: pick(item) }))).then(async (created) => {
       for (const name of new Set(created.map((i) => i.gridOwner))) await this.refreshGridOwnerReminder(name)
+      void this.knowledge.syncIssues(created.map((i) => i.id)) // 批量导入一次嵌入，比逐条快一个数量级
       return created
     })
   }
@@ -66,6 +72,7 @@ export class IssuesService {
     const before = await this.prisma.issue.findUnique({ where: { id } })
     const issue = await this.prisma.issue.update({ where: { id }, data: pick(body) })
     for (const name of new Set([before?.gridOwner, issue.gridOwner])) await this.refreshGridOwnerReminder(name)
+    void this.knowledge.syncIssues([id]) // 内容/状态/分类变更同步进知识库
     return issue
   }
 
@@ -108,6 +115,7 @@ export class IssuesService {
       data: { rechecks: [...issue.rechecks, new Date().toISOString()] },
     })
     await this.prisma.reminder.deleteMany({ where: { type: 'recheck', refId: { startsWith: `${id}#` } } })
+    void this.knowledge.syncIssues([id]) // 复查次数写进知识库文档
     return updated
   }
 
@@ -117,6 +125,7 @@ export class IssuesService {
     if (!issue) throw new NotFoundException(`Issue ${id} not found`)
     const updated = await this.prisma.issue.update({ where: { id }, data: { deletedAt: new Date() } })
     await this.refreshGridOwnerReminder(issue.gridOwner)
+    void this.knowledge.removeIssueDocs([id]) // 回收站条目退出知识库检索
     return updated
   }
 
@@ -126,6 +135,7 @@ export class IssuesService {
     if (!issue) throw new NotFoundException(`Issue ${id} not found`)
     const updated = await this.prisma.issue.update({ where: { id }, data: { deletedAt: null } })
     await this.refreshGridOwnerReminder(issue.gridOwner)
+    void this.knowledge.syncIssues([id])
     return updated
   }
 
@@ -135,6 +145,7 @@ export class IssuesService {
     if (!issue) throw new NotFoundException(`Issue ${id} not found`)
     if (!issue.deletedAt) throw new NotFoundException('该隐患不在回收站中，不能彻底删除')
     await this.prisma.issueAnnotation.deleteMany({ where: { issueId: id } })
+    void this.knowledge.removeIssueDocs([id])
     return this.prisma.issue.delete({ where: { id } })
   }
 }

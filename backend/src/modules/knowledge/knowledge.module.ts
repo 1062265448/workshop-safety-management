@@ -33,6 +33,9 @@ export interface ReindexJob {
   finishedAt: string | null
 }
 
+type IssueRow = Awaited<ReturnType<PrismaService['issue']['findMany']>>[number]
+type IssueAnnotationRow = Awaited<ReturnType<PrismaService['issueAnnotation']['findMany']>>[number]
+
 // 按句/按行切分长文本为 ≤400 字的切片（50 字重叠保持上下文连贯）
 function splitText(text: string, max = 400, overlap = 50): string[] {
   if (text.length <= max) return [text]
@@ -119,6 +122,32 @@ export class KnowledgeService {
     }
   }
 
+  /** 单条隐患 → 知识库文档草稿（collectDocs 全量与 syncIssues 增量共用） */
+  private buildIssueDraft(issue: IssueRow, tagName: Map<string, string>, ann?: IssueAnnotationRow): DocDraft {
+    const RISK: Record<string, string> = { general: '一般', critical: '重大', immediate: '即知即改', major: '较大' }
+    const STATUS: Record<string, string> = { pending: '待整改', fixing: '整改中', review: '复查中', closed: '已闭环' }
+    const lines = [
+      `标题：${issue.title}`,
+      `车间/区域：${issue.locationId ? tagName.get(issue.locationId) ?? '' : '未标注'}`,
+      `类型：${issue.categoryId ? tagName.get(issue.categoryId) ?? '' : '未标注'}`,
+      `风险等级：${RISK[issue.riskLevel] ?? issue.riskLevel}，状态：${STATUS[issue.status] ?? issue.status}`,
+      `发现时间：${issue.foundAt.toISOString().slice(0, 10)}`,
+      issue.description && `问题描述：${issue.description}`,
+      issue.fixNote && `整改措施：${issue.fixNote}`,
+      issue.rechecks.length > 0 && `复查记录：共复查 ${issue.rechecks.length} 次`,
+    ]
+    if (ann && (ann.similarity || ann.caution)) {
+      lines.push(`对成品车间的参考意义：${ann.similarity || '无'}；需严格注意：${ann.caution || '无'}`)
+    }
+    return {
+      kind: 'issue',
+      refId: issue.id,
+      title: issue.title,
+      source: `${issue.scope === 'managed' ? '成品车间' : '其他车间通报'} · ${issue.source === 'manual' ? '手动录入' : issue.sourceFile ?? issue.source}`,
+      chunks: splitText(lines.filter(Boolean).join('\n')),
+    }
+  }
+
   /** 汇总待入库文档：历史隐患（含整改记录与参考标注）+ 督查通报原文 */
   private async collectDocs(): Promise<DocDraft[]> {
     const drafts: DocDraft[] = []
@@ -131,30 +160,8 @@ export class KnowledgeService {
     ])
     const tagName = new Map(tags.map((t) => [t.id, t.name]))
     const annByIssue = new Map(annotations.map((a) => [a.issueId, a]))
-    const RISK: Record<string, string> = { general: '一般', major: '较大', critical: '重大' }
-    const STATUS: Record<string, string> = { pending: '待整改', fixing: '整改中', review: '复查中', closed: '已闭环' }
     for (const issue of issues) {
-      const lines = [
-        `标题：${issue.title}`,
-        `车间/区域：${issue.locationId ? tagName.get(issue.locationId) ?? '' : '未标注'}`,
-        `类型：${issue.categoryId ? tagName.get(issue.categoryId) ?? '' : '未标注'}`,
-        `风险等级：${RISK[issue.riskLevel] ?? issue.riskLevel}，状态：${STATUS[issue.status] ?? issue.status}`,
-        `发现时间：${issue.foundAt.toISOString().slice(0, 10)}`,
-        issue.description && `问题描述：${issue.description}`,
-        issue.fixNote && `整改措施：${issue.fixNote}`,
-        issue.rechecks.length > 0 && `复查记录：共复查 ${issue.rechecks.length} 次`,
-      ]
-      const ann = annByIssue.get(issue.id)
-      if (ann && (ann.similarity || ann.caution)) {
-        lines.push(`对成品车间的参考意义：${ann.similarity || '无'}；需严格注意：${ann.caution || '无'}`)
-      }
-      drafts.push({
-        kind: 'issue',
-        refId: issue.id,
-        title: issue.title,
-        source: `${issue.scope === 'managed' ? '成品车间' : '其他车间通报'} · ${issue.source === 'manual' ? '手动录入' : issue.sourceFile ?? issue.source}`,
-        chunks: splitText(lines.filter(Boolean).join('\n')),
-      })
+      drafts.push(this.buildIssueDraft(issue, tagName, annByIssue.get(issue.id)))
     }
 
     // 2. 督查通报原件（厂督察通报目录下的 pptx，按页切片）
@@ -172,6 +179,65 @@ export class KnowledgeService {
       }
     }
     return drafts
+  }
+
+  /** 批量嵌入切片并写库（全量重建与增量同步共用） */
+  private async embedAndInsert(flat: { docId: string; seq: number; content: string }[], onProgress?: (done: number) => void) {
+    for (let i = 0; i < flat.length; i += EMBED_BATCH) {
+      const batch = flat.slice(i, i + EMBED_BATCH)
+      const vectors = await this.embedding.embed(batch.map((b) => b.content))
+      for (let j = 0; j < batch.length; j++) {
+        await this.prisma.$executeRawUnsafe(
+          `INSERT INTO knowledge_chunks (id, "docId", seq, content, embedding) VALUES ($1, $2, $3, $4, $5::vector)`,
+          `kc_${batch[j].docId}_${batch[j].seq}`,
+          batch[j].docId,
+          batch[j].seq,
+          batch[j].content,
+          `[${vectors[j].join(',')}]`,
+        )
+      }
+      onProgress?.(Math.min(i + EMBED_BATCH, flat.length))
+    }
+  }
+
+  /** 增量同步：把指定隐患按最新内容重建向量文档（增/改/恢复后调用；已删的仅清旧文档）
+   *  后台静默执行，失败只打日志——知识库页仍可手动全量重建兜底 */
+  async syncIssues(ids: string[]) {
+    const unique = [...new Set(ids)].filter(Boolean)
+    if (unique.length === 0 || this.job.running || !this.embedding.ready) return
+    try {
+      const [issues, tags, annotations] = await Promise.all([
+        this.prisma.issue.findMany({ where: { id: { in: unique }, deletedAt: null } }),
+        this.prisma.tag.findMany(),
+        this.prisma.issueAnnotation.findMany({ where: { issueId: { in: unique } } }),
+      ])
+      const tagName = new Map(tags.map((t) => [t.id, t.name]))
+      const annByIssue = new Map(annotations.map((a) => [a.issueId, a]))
+      // 先清旧文档（chunks 级联删除），再按最新内容重建
+      await this.prisma.knowledgeDoc.deleteMany({ where: { kind: 'issue', refId: { in: unique } } })
+      const flat: { docId: string; seq: number; content: string }[] = []
+      for (const issue of issues) {
+        const draft = this.buildIssueDraft(issue, tagName, annByIssue.get(issue.id))
+        const doc = await this.prisma.knowledgeDoc.create({
+          data: { kind: draft.kind, refId: draft.refId, title: draft.title, source: draft.source },
+        })
+        draft.chunks.forEach((content, seq) => flat.push({ docId: doc.id, seq, content }))
+      }
+      await this.embedAndInsert(flat)
+    } catch (e) {
+      console.warn('[knowledge] 增量索引失败（可在知识库页手动重建）:', (e as Error).message)
+    }
+  }
+
+  /** 增量删除：隐患进回收站或彻底删除时移除其向量文档 */
+  async removeIssueDocs(ids: string[]) {
+    const unique = [...new Set(ids)].filter(Boolean)
+    if (unique.length === 0) return
+    try {
+      await this.prisma.knowledgeDoc.deleteMany({ where: { kind: 'issue', refId: { in: unique } } })
+    } catch (e) {
+      console.warn('[knowledge] 增量删除向量文档失败:', (e as Error).message)
+    }
   }
 
   /** 启动后台全量重建（管理员操作）；已在运行则直接返回当前进度 */
@@ -207,22 +273,10 @@ export class KnowledgeService {
     }
     this.job.total = flat.length
 
-    // 批量嵌入 + 批量写库
-    for (let i = 0; i < flat.length; i += EMBED_BATCH) {
-      const batch = flat.slice(i, i + EMBED_BATCH)
-      const vectors = await this.embedding.embed(batch.map((b) => b.content))
-      for (let j = 0; j < batch.length; j++) {
-        await this.prisma.$executeRawUnsafe(
-          `INSERT INTO knowledge_chunks (id, "docId", seq, content, embedding) VALUES ($1, $2, $3, $4, $5::vector)`,
-          `kc_${batch[j].docId}_${batch[j].seq}`,
-          batch[j].docId,
-          batch[j].seq,
-          batch[j].content,
-          `[${vectors[j].join(',')}]`,
-        )
-      }
-      this.job.done = Math.min(i + EMBED_BATCH, flat.length)
-    }
+    // 批量嵌入 + 批量写库（共用 embedAndInsert，回写进度）
+    await this.embedAndInsert(flat, (done) => {
+      this.job.done = done
+    })
     this.job.running = false
     this.job.finishedAt = new Date().toISOString()
   }
@@ -396,5 +450,7 @@ export class KnowledgeController {
 @Module({
   controllers: [KnowledgeController],
   providers: [KnowledgeService, EmbeddingService, LlmService, PrismaService],
+  // 导出给 issues/annotations 模块做增量索引钩子
+  exports: [KnowledgeService],
 })
 export class KnowledgeModule {}
