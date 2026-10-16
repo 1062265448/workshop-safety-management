@@ -50,13 +50,13 @@ export default function IssueList() {
 
   const categories = tags.filter((t) => t.group === 'category')
   const locations = tags.filter((t) => t.group === 'location')
-  /** 标签显示名：子标签带父标签前缀（如「电气设施 · 电缆破损」） */
+  /** 标签显示名：子标签带父标签前缀（如「电气设施-电缆破损」） */
   const tagName = (id?: string) => {
     const t = tags.find((t) => t.id === id)
     if (!t) return undefined
     if (t.parentId) {
       const p = tags.find((x) => x.id === t.parentId)
-      if (p) return `${p.name} · ${t.name}`
+      if (p) return `${p.name}-${t.name}`
     }
     return t.name
   }
@@ -250,7 +250,7 @@ export default function IssueList() {
         <select className={selectCls} value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
           <option value="">全部类型</option>
           {withSubTags(categories).map(({ tag, depth }) => (
-            <option key={tag.id} value={tag.id}>{depth ? `　└ ${tag.name}` : tag.name}</option>
+            <option key={tag.id} value={tag.id}>{depth ? `${categories.find((p) => p.id === tag.parentId)?.name}-${tag.name}` : tag.name}</option>
           ))}
         </select>
         <select className={selectCls} value={locationId} onChange={(e) => setLocationId(e.target.value)}>
@@ -428,7 +428,7 @@ export default function IssueList() {
                   <select className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] outline-none" value={editForm.categoryId} onChange={(e) => setEditForm({ ...editForm, categoryId: e.target.value })}>
                     <option value="">未分类</option>
                     {withSubTags(categories).map(({ tag, depth }) => (
-                      <option key={tag.id} value={tag.id}>{depth ? `　└ ${tag.name}` : tag.name}</option>
+                      <option key={tag.id} value={tag.id}>{depth ? `${categories.find((p) => p.id === tag.parentId)?.name}-${tag.name}` : tag.name}</option>
                     ))}
                   </select>
                 </label>

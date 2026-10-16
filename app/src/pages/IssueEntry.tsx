@@ -369,7 +369,7 @@ export default function IssueEntry() {
                 <select className={inputCls} value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}>
                   <option value="">未分类</option>
                   {withSubTags(categories).map(({ tag, depth }) => (
-                    <option key={tag.id} value={tag.id}>{depth ? `　└ ${tag.name}` : tag.name}</option>
+                    <option key={tag.id} value={tag.id}>{depth ? `${categories.find((p) => p.id === tag.parentId)?.name}-${tag.name}` : tag.name}</option>
                   ))}
                 </select>
               </div>
@@ -595,7 +595,7 @@ export default function IssueEntry() {
                           >
                             <option value="">{d.categoryGuess ? `类型（猜测：${d.categoryGuess}）` : '类型'}</option>
                             {withSubTags(categories).map(({ tag, depth }) => (
-                              <option key={tag.id} value={tag.id}>{depth ? `　└ ${tag.name}` : tag.name}</option>
+                              <option key={tag.id} value={tag.id}>{depth ? `${categories.find((p) => p.id === tag.parentId)?.name}-${tag.name}` : tag.name}</option>
                             ))}
                           </select>
                           <select
