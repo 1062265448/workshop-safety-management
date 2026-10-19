@@ -18,9 +18,11 @@ function Log([string]$msg) {
     Add-Content -Path $logFile -Value $line -Encoding UTF8
 }
 
-# Windows 上 docker CLI 不一定在 PATH，补默认安装路径
+# Windows 上 docker CLI 不一定在 PATH，补默认安装路径（本机实测在 C:\Docker）
 $dockerBin = 'C:\Program Files\Docker\Docker\resources\bin'
 if (Test-Path $dockerBin) { $env:Path = "$dockerBin;$env:Path" }
+$dockerBinLocal = 'C:\Docker\resources\bin'
+if (Test-Path $dockerBinLocal) { $env:Path = "$dockerBinLocal;$env:Path" }
 
 $container = 'wsms-postgres'
 
