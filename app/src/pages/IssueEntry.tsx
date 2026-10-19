@@ -168,6 +168,9 @@ export default function IssueEntry() {
   /** 导入查重：每条草稿与库中既有隐患的疑似重复命中（按草稿 key） */
   const [dupByKey, setDupByKey] = useState<Record<string, SimilarCase[]>>({})
   const [dupOpen, setDupOpen] = useState<string | null>(null)
+  /** 去重自动跳过：批内重复（key→保留条标题）与库中高相似（key→最高命中），这些草稿默认取消勾选，可手动恢复 */
+  const [intraDup, setIntraDup] = useState<Record<string, string>>({})
+  const [libDupSkip, setLibDupSkip] = useState<Record<string, SimilarCase>>({})
 
   // ── AI 预标注（暂存区批量）：原则二——AI 只预判，人工「采用」后才填入字段 ──
   const [prelabeling, setPrelabeling] = useState(false)
@@ -236,6 +239,8 @@ export default function IssueEntry() {
     setSourceFiles([])
     setDupByKey({})
     setDupOpen(null)
+    setIntraDup({})
+    setLibDupSkip({})
     try {
       const allDrafts: IssueDraft[] = []
       const allReviews: ReviewDraft[] = []
@@ -275,22 +280,46 @@ export default function IssueEntry() {
         return { ...r, matchedIssueId: m?.issueId, matchedIssueTitle: m?.issueTitle }
       })
       setSourceFiles(filesMeta)
-      setDrafts(withTags)
+      // 批内去重：归一化标题（去空白标点）相同的条目只保留首条勾选，其余默认跳过（多文件导入时同一问题常在 PPT 与 Word 汇总表重复出现）
+      const normTitle = (t: string) => t.toLowerCase().replace(/[\s　，。、；：""''（）()【】《》<>「」\-—·.!！?？]/g, '')
+      const seenTitles = new Map<string, string>()
+      const intra: Record<string, string> = {}
+      const dedupedDrafts = withTags.map((d) => {
+        const n = normTitle(d.title)
+        if (!n) return d
+        const firstTitle = seenTitles.get(n)
+        if (firstTitle) {
+          intra[d.key] = firstTitle
+          return { ...d, accepted: false }
+        }
+        seenTitles.set(n, d.title)
+        return d
+      })
+      setIntraDup(intra)
+      setDrafts(dedupedDrafts)
       setReviews(withMatch)
       setSkipped(allSkipped)
       // 导入查重：草稿全部入暂存区后，批量比对库中既有隐患，疑似重复的标记出来（不阻断导入，后台完成）
       api<{ ready: boolean; results: SimilarCase[][] }>('/knowledge/similar-batch', {
         method: 'POST',
-        body: JSON.stringify({ texts: withTags.map((d) => `${d.title}\n${d.description}`), limit: 2 }),
+        body: JSON.stringify({ texts: dedupedDrafts.map((d) => `${d.title}\n${d.description}`), limit: 2 }),
       })
         .then((res) => {
           if (!res.ready) return
           const map: Record<string, SimilarCase[]> = {}
-          withTags.forEach((d, i) => {
+          const autoSkip: Record<string, SimilarCase> = {}
+          dedupedDrafts.forEach((d, i) => {
             const hits = (res.results[i] ?? []).filter((x) => x.score >= 0.35)
             if (hits.length) map[d.key] = hits
+            // 高相似（≥60%）视为同一问题重复导入，默认跳过；35%~60% 仅提示人工核对
+            const top = hits[0]
+            if (top && top.score >= 0.6) autoSkip[d.key] = top
           })
           setDupByKey(map)
+          if (Object.keys(autoSkip).length) {
+            setLibDupSkip(autoSkip)
+            setDrafts((cur) => cur.map((x) => (autoSkip[x.key] ? { ...x, accepted: false } : x)))
+          }
         })
         .catch(() => {})
     } catch (e) {
@@ -800,6 +829,25 @@ export default function IssueEntry() {
                   <div className="text-[12px] text-neutral-400">AI 预标注需先在知识库页配置 DeepSeek Key</div>
                 )}
                 {prelabelError && <div className="text-[12px] text-[#D70015]">{prelabelError}</div>}
+                {/* 去重摘要：批内重复 + 库中高相似自动跳过的条目数，可一键恢复 */}
+                {(Object.keys(intraDup).length > 0 || Object.keys(libDupSkip).length > 0) && (
+                  <div className="flex items-center gap-2 flex-wrap text-[12px] text-[#B25000]">
+                    <span>
+                      去重：已自动跳过 {Object.keys(intraDup).length + Object.keys(libDupSkip).length} 条
+                      （批内重复 {Object.keys(intraDup).length} · 与库中疑似重复 {Object.keys(libDupSkip).length}），
+                      勾选项可手动恢复
+                    </span>
+                    <button
+                      onClick={() => {
+                        const keys = new Set([...Object.keys(intraDup), ...Object.keys(libDupSkip)])
+                        setDrafts((cur) => cur.map((x) => (keys.has(x.key) ? { ...x, accepted: true } : x)))
+                      }}
+                      className="text-[#007AFF] hover:underline"
+                    >
+                      全部恢复
+                    </button>
+                  </div>
+                )}
                 <div className="flex flex-wrap gap-1.5">
                   {sourceFiles.map((f) => (
                     <span key={f.name} className="px-2 py-0.5 rounded-md bg-neutral-100 text-[11px] text-neutral-500">{f.name}</span>
@@ -853,6 +901,23 @@ export default function IssueEntry() {
                           </div>
                         )}
                         <div className="flex gap-2 flex-wrap items-center">
+                          {/* 去重跳过原因：批内重复 / 与库中高相似，取消勾选状态可手动恢复 */}
+                          {intraDup[d.key] && (
+                            <span
+                              className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-[#FF3B30]/10 text-[#D70015]"
+                              title={`与本批次「${intraDup[d.key]}」重复，已默认跳过；重新勾选可恢复入库`}
+                            >
+                              批内重复 · 已跳过
+                            </span>
+                          )}
+                          {libDupSkip[d.key] && (
+                            <span
+                              className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-[#FF9500]/12 text-[#B25000]"
+                              title={`与库中「${libDupSkip[d.key].title}」相似度 ${Math.round(libDupSkip[d.key].score * 100)}%，已默认跳过；重新勾选可恢复入库`}
+                            >
+                              疑似已入库 {Math.round(libDupSkip[d.key].score * 100)}% · 已跳过
+                            </span>
+                          )}
                           <span className={`px-2 py-0.5 rounded-md text-[11px] font-medium ${isManagedWorkshop(d.locationGuess) ? 'bg-[#007AFF]/12 text-[#007AFF]' : 'bg-neutral-500/10 text-neutral-500'}`}>
                             {isManagedWorkshop(d.locationGuess) ? '成品车间 · 纳入闭环' : '其他车间 · 仅参考'}
                           </span>
