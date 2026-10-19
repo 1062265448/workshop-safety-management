@@ -14,6 +14,8 @@ const WRITABLE = [
   'causeType', 'countermeasureLevel', 'countermeasureReason',
   'institutionNote', 'linkedKnowledgeDocId',
   'reviewed', 'isGood',
+  // AI 预标注结果（只预判，单独存放，不覆盖人工字段）
+  'aiCategory', 'aiRiskLevel', 'aiCauseType', 'aiSuggestion',
 ] as const
 
 /** 关联法规的 include（列表/详情/关联操作统一） */

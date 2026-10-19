@@ -13,6 +13,7 @@ import { UploadsModule } from './modules/uploads/uploads.module'
 import { UsersModule } from './modules/users/users.module'
 import { KnowledgeModule } from './modules/knowledge/knowledge.module'
 import { RegulationsModule } from './modules/regulations/regulations.module'
+import { PrelabelModule } from './modules/issues/prelabel.module'
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { RegulationsModule } from './modules/regulations/regulations.module'
     UsersModule,
     KnowledgeModule,
     RegulationsModule,
+    PrelabelModule,
   ],
   providers: [
     // 全局守卫：AuthGuard 先认证，RolesGuard 再按角色授权（@Roles 显式声明 > 默认 viewer 只读）

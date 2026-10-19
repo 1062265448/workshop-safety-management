@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { FileUp, Loader2, CheckSquare, Square, ClipboardCheck, ImagePlus, ThumbsUp, X, ChevronDown, ChevronRight } from 'lucide-react'
+import { FileUp, Loader2, CheckSquare, Square, ClipboardCheck, ImagePlus, ThumbsUp, X, ChevronDown, ChevronRight, Sparkles } from 'lucide-react'
 import { uploadPhotos, useStore } from '@/lib/store'
 import { isManagedWorkshop, TEAMS, countGridOwners, withSubTags } from '@/lib/config'
 import { detectSource, parseFileOffthread, type SkippedPage } from '@/lib/import/parsers'
 import { matchReview } from '@/lib/import/matchReview'
 import { RISK_LABEL, RiskBadge, StatusBadge, CAUSE_TYPE_LABEL, COUNTERMEASURE_LABEL } from '@/components/badges'
-import type { CauseType, CountermeasureLevel, IssueDraft, IssueSource, ReviewDraft, RiskLevel } from '@/types'
+import type { CauseType, CountermeasureLevel, IssueDraft, IssueSource, PrelabelSuggestion, ReviewDraft, RiskLevel, StyleCheckResult } from '@/types'
 
 // ── 录入联动：与知识库语义比对，提示相似既有隐患 ──
 interface SimilarCase { issueId: string; title: string; score: number; snippet: string }
@@ -48,6 +48,34 @@ export default function IssueEntry() {
   const locations = tags.filter((t) => t.group === 'location')
   /** 网格责任人重复统计：录入时同名即时提醒 */
   const gridOwnerCounts = countGridOwners(issues)
+
+  // ── AI 能力：DeepSeek Key 在知识库页配置，未配置时 AI 按钮禁用/隐藏 ──
+  const [llmReady, setLlmReady] = useState(false)
+  useEffect(() => {
+    api<{ apiKeySet: boolean }>('/knowledge/config').then((c) => setLlmReady(c.apiKeySet)).catch(() => setLlmReady(false))
+  }, [])
+
+  // ── 文字规范检查（手动录入「问题描述」）：四要素 + 模糊词拦截，只改写不编造 ──
+  const [styleLoading, setStyleLoading] = useState(false)
+  const [styleResult, setStyleResult] = useState<StyleCheckResult | null>(null)
+  const [styleError, setStyleError] = useState('')
+  const runStyleCheck = async () => {
+    if (styleLoading) return
+    setStyleLoading(true)
+    setStyleError('')
+    setStyleResult(null)
+    try {
+      const res = await api<StyleCheckResult>('/issues/style-check', {
+        method: 'POST',
+        body: JSON.stringify({ text: form.description }),
+      })
+      setStyleResult(res)
+    } catch (e) {
+      setStyleError(e instanceof Error ? e.message : '规范检查失败')
+    } finally {
+      setStyleLoading(false)
+    }
+  }
 
   // ── 录入联动：标题/描述停顿后检索相似案例，避免同类问题重复发生 ──
   const [similar, setSimilar] = useState<SimilarCase[]>([])
@@ -140,6 +168,57 @@ export default function IssueEntry() {
   /** 导入查重：每条草稿与库中既有隐患的疑似重复命中（按草稿 key） */
   const [dupByKey, setDupByKey] = useState<Record<string, SimilarCase[]>>({})
   const [dupOpen, setDupOpen] = useState<string | null>(null)
+
+  // ── AI 预标注（暂存区批量）：原则二——AI 只预判，人工「采用」后才填入字段 ──
+  const [prelabeling, setPrelabeling] = useState(false)
+  const [prelabelError, setPrelabelError] = useState('')
+
+  /** AI 返回的类型名（子标签可能是「父-子」或仅原名）→ 现有标签 id */
+  const findCategoryId = (name?: string | null): string | undefined => {
+    if (!name) return undefined
+    for (const { tag, depth } of withSubTags(categories)) {
+      const display = depth ? `${categories.find((p) => p.id === tag.parentId)?.name}-${tag.name}` : tag.name
+      if (display === name || tag.name === name) return tag.id
+    }
+    return undefined
+  }
+
+  /** 批量 AI 预标注：短文本后端自动跳过，单条失败不中断整批 */
+  const runPrelabel = async () => {
+    if (prelabeling || !drafts.length) return
+    setPrelabeling(true)
+    setPrelabelError('')
+    try {
+      const results = await api<PrelabelSuggestion[]>('/issues/prelabel', {
+        method: 'POST',
+        body: JSON.stringify({
+          items: drafts.map((d) => ({ title: d.title, description: d.description, workshop: d.locationGuess })),
+        }),
+      })
+      setDrafts(drafts.map((d, i) => ({ ...d, ai: results[i] ?? { error: 'AI 未返回该条结果' } })))
+    } catch (e) {
+      setPrelabelError(e instanceof Error ? e.message : 'AI 预标注失败')
+    } finally {
+      setPrelabeling(false)
+    }
+  }
+
+  /** 采用 AI 建议：一键填入类型/等级/根因（填入后仍可人工修改） */
+  const adoptAi = (key: string, ai: PrelabelSuggestion) => {
+    setDrafts((cur) =>
+      cur.map((x) =>
+        x.key === key
+          ? {
+              ...x,
+              categoryId: findCategoryId(ai.categoryName) ?? x.categoryId,
+              riskLevel: ai.riskLevel ?? x.riskLevel,
+              causeType: ai.causeType ?? x.causeType,
+              countermeasureLevel: ai.causeType === 'system' ? ai.countermeasureLevel ?? x.countermeasureLevel : x.countermeasureLevel,
+            }
+          : x,
+      ),
+    )
+  }
 
   /** 按风险等级的默认整改期限（天）：即知即改当天 */
   const DEADLINE_DAYS: Record<RiskLevel, number> = { critical: 3, general: 15, immediate: 0 }
@@ -261,6 +340,14 @@ export default function IssueEntry() {
               deadline: managed
                 ? new Date(new Date(foundAt).getTime() + DEADLINE_DAYS[d.riskLevel] * 86_400_000).toISOString()
                 : undefined,
+              // 采用 AI 建议后回填的根因（作为人工字段入库）
+              causeType: d.causeType,
+              countermeasureLevel: d.causeType === 'system' ? d.countermeasureLevel : undefined,
+              // AI 预填结果单独存档（原则二：只预判，不覆盖人工字段；供改动率统计与详情对照）
+              aiCategory: d.ai && !d.ai.skipped && !d.ai.error ? d.ai.categoryName ?? null : null,
+              aiRiskLevel: d.ai && !d.ai.skipped && !d.ai.error ? d.ai.riskLevel ?? null : null,
+              aiCauseType: d.ai && !d.ai.skipped && !d.ai.error ? d.ai.causeType ?? null : null,
+              aiSuggestion: d.ai && !d.ai.skipped && !d.ai.error ? d.ai.suggestion ?? null : null,
             }
           }),
         )
@@ -329,13 +416,66 @@ export default function IssueEntry() {
               />
             </div>
             <div>
-              <label className="text-[13px] text-neutral-500 block mb-1.5">问题描述</label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-[13px] text-neutral-500">问题描述</label>
+                {llmReady && (
+                  <button
+                    type="button"
+                    onClick={runStyleCheck}
+                    disabled={styleLoading || form.description.replace(/\s+/g, '').length < 10}
+                    title="按「谁、做什么、做到什么程度、何时完成」四要素检查，拦截「加强、尽快、适当」类模糊词（少于 10 字不检查）"
+                    className="text-[12px] text-[#007AFF] hover:underline disabled:text-neutral-300 disabled:no-underline flex items-center gap-1"
+                  >
+                    {styleLoading && <Loader2 className="w-3 h-3 animate-spin" />}
+                    规范检查
+                  </button>
+                )}
+              </div>
               <textarea
                 className={`${inputCls} min-h-28`}
                 value={form.description}
                 onChange={(e) => setForm({ ...form, description: e.target.value })}
                 placeholder="位置、现状、风险说明…"
               />
+              {/* 规范检查结果：问题列表 + AI 改写稿 + 采用改写 */}
+              {styleError && <p className="text-[12px] text-[#D70015] mt-1.5">{styleError}</p>}
+              {styleResult && !styleResult.skipped && (
+                <div className="mt-2 rounded-xl bg-neutral-50 border border-neutral-100 px-3.5 py-3 space-y-2">
+                  {styleResult.ok ? (
+                    <p className="text-[12px] text-[#248A3D]">文本符合「谁、做什么、做到什么程度、何时完成」四要素，无需改写</p>
+                  ) : (
+                    <>
+                      <ul className="space-y-1">
+                        {(styleResult.problems ?? []).map((p, i) => (
+                          <li key={i} className="text-[12px] text-[#B25000] flex gap-1.5">
+                            <span className="shrink-0">·</span>
+                            {p}
+                          </li>
+                        ))}
+                      </ul>
+                      {styleResult.rewrite && (
+                        <div className="rounded-lg bg-white border border-neutral-200 px-3 py-2">
+                          <div className="text-[11px] text-neutral-400 mb-1">AI 改写稿（缺信息以【待补】占位，采用前请核对）</div>
+                          <p className="text-[13px] text-neutral-700 leading-relaxed whitespace-pre-wrap">{styleResult.rewrite}</p>
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (styleResult.rewrite) setForm({ ...form, description: styleResult.rewrite })
+                          setStyleResult(null)
+                        }}
+                        className="text-[12px] text-[#007AFF] hover:underline"
+                      >
+                        采用改写
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+              {styleResult?.skipped === 'too_short' && (
+                <p className="text-[12px] text-neutral-400 mt-1.5">文本少于 10 字，未送 AI 检查</p>
+              )}
             </div>
           </section>
 
@@ -640,10 +780,26 @@ export default function IssueEntry() {
           {(drafts.length > 0 || reviews.length > 0) && (
             <div className="space-y-3">
               <div className="text-[13px] text-neutral-500 space-y-1">
-                <div>
-                  来自 <span className="text-neutral-800 font-medium">{sourceFiles.length} 个文件</span>，
-                  识别出 {drafts.length} 条隐患{reviews.length > 0 && `、${reviews.length} 条复查核销`}，勾选确认生效的条目：
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div>
+                    来自 <span className="text-neutral-800 font-medium">{sourceFiles.length} 个文件</span>，
+                    识别出 {drafts.length} 条隐患{reviews.length > 0 && `、${reviews.length} 条复查核销`}，勾选确认生效的条目：
+                  </div>
+                  {/* AI 预标注：AI 只预判，行内灰色小字展示，人工「采用」才填入字段；未配置 Key 时禁用 */}
+                  <button
+                    onClick={runPrelabel}
+                    disabled={!llmReady || prelabeling || drafts.length === 0}
+                    title={llmReady ? '调 DeepSeek 给每条草稿预判类型/等级/根因/整改建议（少于 30 字的条目自动跳过）' : '请先在知识库页「API 配置」中填写 DeepSeek Key'}
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-[#007AFF]/40 text-[#007AFF] text-[12px] font-medium hover:bg-[#007AFF]/8 transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
+                  >
+                    {prelabeling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                    {prelabeling ? 'AI 预标注中…' : 'AI 预标注'}
+                  </button>
                 </div>
+                {!llmReady && (
+                  <div className="text-[12px] text-neutral-400">AI 预标注需先在知识库页配置 DeepSeek Key</div>
+                )}
+                {prelabelError && <div className="text-[12px] text-[#D70015]">{prelabelError}</div>}
                 <div className="flex flex-wrap gap-1.5">
                   {sourceFiles.map((f) => (
                     <span key={f.name} className="px-2 py-0.5 rounded-md bg-neutral-100 text-[11px] text-neutral-500">{f.name}</span>
@@ -731,6 +887,38 @@ export default function IssueEntry() {
                             {(['immediate', 'general', 'critical'] as const).map((r) => <option key={r} value={r}>{RISK_LABEL[r]}</option>)}
                           </select>
                         </div>
+                        {/* AI 预标注建议：灰色小字行内展示，人工「采用」一键填入对应字段 */}
+                        {d.ai && (
+                          <div className="rounded-lg bg-neutral-100/70 px-2.5 py-1.5 flex items-start gap-2">
+                            <Sparkles className="w-3 h-3 mt-0.5 shrink-0 text-neutral-400" />
+                            {d.ai.skipped === 'too_short' ? (
+                              <span className="text-[11px] text-neutral-400">文本少于 30 字，未送 AI 预标注</span>
+                            ) : d.ai.error ? (
+                              <span className="text-[11px] text-[#B25000]">AI 预标注未成功：{d.ai.error}（不影响其他条目，可人工填写）</span>
+                            ) : (
+                              <>
+                                <span className="flex-1 text-[11px] text-neutral-400 leading-relaxed">
+                                  AI 建议：
+                                  {[
+                                    d.ai.categoryName && `类型 ${d.ai.categoryName}`,
+                                    d.ai.riskLevel && `等级 ${RISK_LABEL[d.ai.riskLevel]}`,
+                                    d.ai.causeType &&
+                                      `根因 ${CAUSE_TYPE_LABEL[d.ai.causeType]}${d.ai.causeType === 'system' && d.ai.countermeasureLevel ? `（对策：${COUNTERMEASURE_LABEL[d.ai.countermeasureLevel]}）` : ''}`,
+                                    d.ai.suggestion && `整改：${d.ai.suggestion}`,
+                                  ]
+                                    .filter(Boolean)
+                                    .join('；') || '信息不足，未给出建议'}
+                                </span>
+                                <button
+                                  onClick={() => adoptAi(d.key, d.ai!)}
+                                  className="shrink-0 text-[11px] text-[#007AFF] hover:underline"
+                                >
+                                  采用
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        )}
                         {/* 疑似重复：与库中既有隐患高度相似，入库前请人工核对是否同一问题 */}
                         {dupByKey[d.key]?.map((hit) => {
                           const hitIssue = issues.find((i) => i.id === hit.issueId)

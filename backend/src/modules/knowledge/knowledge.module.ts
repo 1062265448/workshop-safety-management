@@ -635,7 +635,7 @@ export class KnowledgeController {
 @Module({
   controllers: [KnowledgeController],
   providers: [KnowledgeService, EmbeddingService, LlmService, PrismaService],
-  // 导出给 issues/annotations 模块做增量索引钩子
-  exports: [KnowledgeService],
+  // 导出给 issues/annotations 模块做增量索引钩子；LlmService 供 prelabel 模块复用同一套大模型配置
+  exports: [KnowledgeService, LlmService],
 })
 export class KnowledgeModule {}

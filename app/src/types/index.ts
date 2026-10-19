@@ -87,6 +87,14 @@ export interface SafetyIssue {
   deletedAt?: string | null
   /** 人工复核标记：手动录入为 true；AI 批量识别入库为 false，复核后改 true */
   reviewed?: boolean
+  /** AI 预标注（只预判，不覆盖人工字段）：建议的隐患类型名（含子标签「父-子」） */
+  aiCategory?: string | null
+  /** AI 建议风险等级 */
+  aiRiskLevel?: RiskLevel | null
+  /** AI 建议根因类别 */
+  aiCauseType?: CauseType | null
+  /** AI 整改建议（一句话） */
+  aiSuggestion?: string | null
   /** 正面典型（做得好）：不计入整改闭环/超期提醒，自动沉淀知识库「好做法」 */
   isGood?: boolean
   /** isGood=true 时自动创建的知识库「好做法」文档 id */
@@ -272,6 +280,46 @@ export interface IssueDraft {
   photos?: File[]
   /** 批量导入时来源文件名（用于按文件归类与入库 sourceFile） */
   fileName?: string
+  /** AI 预标注结果（暂存区行内展示 + 入库时写入 ai* 字段） */
+  ai?: PrelabelSuggestion
+  /** 采用 AI 建议后回填的根因类别（随入库提交人工字段） */
+  causeType?: CauseType
+  countermeasureLevel?: CountermeasureLevel
+}
+
+/** AI 预标注单条结果：skipped=文本过短未送 AI；error=该条失败（不中断整批） */
+export interface PrelabelSuggestion {
+  categoryName?: string | null
+  riskLevel?: RiskLevel | null
+  causeType?: CauseType | null
+  countermeasureLevel?: CountermeasureLevel | null
+  suggestion?: string | null
+  skipped?: 'too_short'
+  error?: string
+}
+
+/** AI 预标注范例（已复核且已分类的隐患，供提示词对齐口径） */
+export interface PrelabelExample {
+  id: string
+  categoryName: string
+  title: string
+  description: string
+  createdAt: string
+}
+
+/** 人工改动率：改动率高说明 AI 口径与人工偏差大，可多设范例 */
+export interface PrelabelStats {
+  total: number
+  changed: number
+  rate: number
+}
+
+/** 文字规范检查结果（四要素检查 + 模糊词拦截；skipped=文本过短未送 AI） */
+export interface StyleCheckResult {
+  ok?: boolean
+  problems?: string[]
+  rewrite?: string
+  skipped?: 'too_short'
 }
 
 /** 督查通报"复查核销页"解析记录：用于自动闭环库中对应隐患 */

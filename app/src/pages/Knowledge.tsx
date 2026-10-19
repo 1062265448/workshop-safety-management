@@ -4,7 +4,7 @@ import { Link } from 'react-router'
 import { getCurrentUser } from '@/lib/auth'
 import { diffLines, type DiffLine } from '@/lib/diffLines'
 import { REG_CATEGORY_META, REG_CATEGORY_ORDER } from '@/components/badges'
-import type { KnowledgeDocDetail, KnowledgeDocItem, KnowledgeDocVersionItem, Regulation } from '@/types'
+import type { KnowledgeDocDetail, KnowledgeDocItem, KnowledgeDocVersionItem, PrelabelStats, Regulation } from '@/types'
 
 // ─────────────────────────────────────────────────────────────
 // 知识库：语义检索车间历史隐患、参考标注与督查通报原文
@@ -93,6 +93,9 @@ export default function Knowledge() {
   const [cfgSaving, setCfgSaving] = useState(false)
   const [cfgMsg, setCfgMsg] = useState('')
 
+  // AI 预标注人工改动率（改动率高说明 AI 口径与人工偏差大，可多设范例）
+  const [prelabelStats, setPrelabelStats] = useState<PrelabelStats | null>(null)
+
   // ── 法规制度页签 ──
   const [regs, setRegs] = useState<Regulation[] | null>(null)
   const [regQ, setRegQ] = useState('')
@@ -124,6 +127,7 @@ export default function Knowledge() {
     api<ReindexJob>('/knowledge/reindex/status').then((j) => {
       if (j.running) { setJob(j); startPolling() }
     }).catch(() => undefined)
+    api<PrelabelStats>('/issues/prelabel/stats').then(setPrelabelStats).catch(() => setPrelabelStats(null))
     return () => { if (pollTimer.current) clearInterval(pollTimer.current) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -366,6 +370,24 @@ export default function Knowledge() {
                   </button>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* AI 预标注改动率：改动率高说明 AI 口径与人工偏差大，可多设范例 */}
+          {prelabelStats && prelabelStats.total > 0 && (
+            <div className="rounded-2xl bg-white p-4 shadow-sm border border-neutral-100 text-[13px] text-neutral-600 flex flex-wrap items-center gap-x-5 gap-y-2">
+              <span className="font-medium text-neutral-800">AI 预标注改动率</span>
+              <span>已预标注 <b className="text-neutral-900">{prelabelStats.total}</b> 条</span>
+              <span>人工改判 <b className="text-neutral-900">{prelabelStats.changed}</b> 条</span>
+              <span>
+                改动率{' '}
+                <b className={prelabelStats.rate >= 0.3 ? 'text-[#B25000]' : 'text-[#248A3D]'}>
+                  {(prelabelStats.rate * 100).toFixed(0)}%
+                </b>
+              </span>
+              <span className="text-[12px] text-neutral-400 ml-auto">
+                改动率高说明 AI 口径与人工偏差大，可在问题库详情把已复核条目「设为 AI 范例」
+              </span>
             </div>
           )}
 

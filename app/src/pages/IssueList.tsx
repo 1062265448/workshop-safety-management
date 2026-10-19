@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { BookMarked, CheckCircle2, ChevronLeft, ChevronRight, Circle, ImagePlus, Plus, RotateCcw, Search, ThumbsUp, Trash2, X, XCircle } from 'lucide-react'
+import { BookMarked, CheckCircle2, ChevronLeft, ChevronRight, Circle, ImagePlus, Plus, RotateCcw, Search, Sparkles, ThumbsUp, Trash2, X, XCircle } from 'lucide-react'
 import { api, isOverdue, uploadPhotos, useStore } from '@/lib/store'
 import { TEAMS, countGridOwners, gridOwnerTier, withSubTags } from '@/lib/config'
 import { fmtDate, fmtDateTime } from '@/lib/format'
@@ -58,6 +58,28 @@ export default function IssueList() {
   const [regSearching, setRegSearching] = useState(false)
   /** 编辑表单根因校验：系统原因选「管理」时必须说明理由 */
   const editReasonMissing = editForm.causeType === 'system' && editForm.countermeasureLevel === 'management' && !editForm.countermeasureReason.trim()
+
+  // ── AI 范例学习：已复核且已分类的隐患可设为 AI 范例（对齐主任口径，越用越准） ──
+  const [exampleSaving, setExampleSaving] = useState(false)
+  const [exampleSaved, setExampleSaved] = useState(false)
+  const [exampleError, setExampleError] = useState('')
+  const setAsExample = async (issue: SafetyIssue) => {
+    const categoryName = tagName(issue.categoryId)
+    if (!categoryName || exampleSaving) return
+    setExampleSaving(true)
+    setExampleError('')
+    try {
+      await api('/issues/prelabel/examples', {
+        method: 'POST',
+        body: JSON.stringify({ categoryName, title: issue.title, description: issue.description }),
+      })
+      setExampleSaved(true)
+    } catch (e) {
+      setExampleError(e instanceof Error ? e.message : '设为范例失败')
+    } finally {
+      setExampleSaving(false)
+    }
+  }
 
   const categories = tags.filter((t) => t.group === 'category')
   const locations = tags.filter((t) => t.group === 'location')
@@ -189,6 +211,8 @@ export default function IssueList() {
     setInstitutionDraft({ note: issue.institutionNote ?? '', docId: issue.linkedKnowledgeDocId ?? '' })
     setRegQ('')
     setRegResults([])
+    setExampleSaved(false)
+    setExampleError('')
     // 制度沉淀阶段需要知识库条目下拉，首次打开详情时拉一次
     if (knowledgeDocs.length === 0) api<KnowledgeDocOption[]>('/issues/knowledge-docs').then(setKnowledgeDocs).catch(() => {})
   }
@@ -651,6 +675,29 @@ export default function IssueList() {
             </dl>
             )}
 
+            {/* AI 原判对照：AI 预填与人工最终字段不一致时提示（原则二：人工确认才算数） */}
+            {!editing && (() => {
+              const diffs: string[] = []
+              const humanCat = tagName(detailIssue.categoryId)
+              // 子标签 AI 可能只回原名，人工名以其结尾也算一致，避免误报
+              if (detailIssue.aiCategory && !(humanCat === detailIssue.aiCategory || humanCat?.endsWith(`-${detailIssue.aiCategory}`))) {
+                diffs.push(`类型 ${detailIssue.aiCategory}`)
+              }
+              if (detailIssue.aiRiskLevel && detailIssue.aiRiskLevel !== detailIssue.riskLevel) {
+                diffs.push(`等级 ${RISK_LABEL[detailIssue.aiRiskLevel] ?? detailIssue.aiRiskLevel}`)
+              }
+              if (detailIssue.aiCauseType && detailIssue.aiCauseType !== detailIssue.causeType) {
+                diffs.push(`根因 ${CAUSE_TYPE_LABEL[detailIssue.aiCauseType] ?? detailIssue.aiCauseType}`)
+              }
+              if (!diffs.length && !detailIssue.aiSuggestion) return null
+              return (
+                <p className="text-[11px] text-neutral-400 leading-relaxed">
+                  {diffs.length > 0 && <>AI 原判：{diffs.join('、')}，人工已修正。</>}
+                  {detailIssue.aiSuggestion && <>AI 整改建议：{detailIssue.aiSuggestion}</>}
+                </p>
+              )
+            })()}
+
             {/* 系统原因 */}
             {!editing && detailIssue.systemCause && (
               <div className="rounded-xl bg-[#5856D6]/6 border border-[#5856D6]/15 p-3.5">
@@ -962,6 +1009,19 @@ export default function IssueList() {
                 <ThumbsUp className="w-3.5 h-3.5" />
                 {detailIssue.isGood ? '已标为好做法 · 点击取消' : '标为好做法'}
               </button>
+              {/* AI 范例学习：已复核且已分类的隐患设为范例，预标注提示词按此口径对齐 */}
+              {detailIssue.reviewed !== false && detailIssue.categoryId && (
+                <button
+                  onClick={() => setAsExample(detailIssue)}
+                  disabled={exampleSaving || exampleSaved}
+                  title="把这条人工确认的分类设为 AI 范例：下次预标注时每类取最近 3 条范例对齐口径"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium text-[#007AFF] border border-[#007AFF]/40 hover:bg-[#007AFF]/8 transition-colors disabled:opacity-50"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  {exampleSaved ? '已设为 AI 范例' : exampleSaving ? '保存中…' : '设为 AI 范例'}
+                </button>
+              )}
+              {exampleError && <span className="text-[11px] text-[#D70015]">{exampleError}</span>}
               <button
                 onClick={() => startEdit(detailIssue)}
                 className="px-3 py-1.5 rounded-full text-[#007AFF] text-[12px] hover:bg-[#007AFF]/8 transition-colors"

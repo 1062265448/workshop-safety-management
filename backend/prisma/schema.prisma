@@ -66,6 +66,14 @@ model Issue {
   deletedAt   DateTime?
   /// 人工复核标记：手动录入默认已复核；AI 批量识别入库的为 false，人工复核后改 true
   reviewed    Boolean  @default(true)
+  /// AI 预标注（原则二：AI 只预判，不覆盖人工字段）：建议的隐患类型名（对应 tags 表 group=category，含子标签名）
+  aiCategory   String?
+  /// AI 建议风险等级：general | critical | immediate
+  aiRiskLevel  String?
+  /// AI 建议根因类别：system | individual
+  aiCauseType  String?
+  /// AI 整改建议（一句话）
+  aiSuggestion String?
   /// 正面典型（做得好）：不计入整改闭环/超期提醒/重复考核，自动沉淀进知识库「好做法」
   isGood      Boolean  @default(false)
   /// isGood=true 时自动创建的知识库「好做法」文档 id（取消标记时随之删除）
@@ -213,6 +221,19 @@ model Reminder {
 
   @@unique([type, refId])
   @@map("reminders")
+}
+
+/// AI 预标注范例（范例学习：每类取最近 3 条拼进提示词，对齐主任口径，越用越准）
+model PrelabelExample {
+  id           String   @id @default(cuid())
+  /// 人工确认的隐患类型名（对应 tags 表 group=category）
+  categoryName String
+  title        String
+  description  String   @default("")
+  createdAt    DateTime @default(now())
+
+  @@index([categoryName])
+  @@map("prelabel_examples")
 }
 
 /// 系统设置（键值对）：LLM 配置等可在页面上修改的项，优先于环境变量
