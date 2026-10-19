@@ -107,6 +107,8 @@ export default function IssueEntry() {
         recheckIntervalDays: 7,
         recheckRequired: 3,
         rechecks: [],
+        // 手动录入即人工复核
+        reviewed: true,
       })
       navigate('/issues')
     } finally {
@@ -114,15 +116,16 @@ export default function IssueEntry() {
     }
   }
 
-  // ── 文件导入（暂存区模式） ──
+  // ── 文件导入（暂存区模式，支持批量多文件） ──
   const fileRef = useRef<HTMLInputElement>(null)
   const [parsing, setParsing] = useState(false)
   const [parseStage, setParseStage] = useState('')
   const [importing, setImporting] = useState(false)
-  const [sourceFile, setSourceFile] = useState<{ name: string; source: IssueSource } | null>(null)
+  /** 本次批量解析的文件清单（名称 + 类型） */
+  const [sourceFiles, setSourceFiles] = useState<Array<{ name: string; source: IssueSource }>>([])
   const [drafts, setDrafts] = useState<IssueDraft[]>([])
   const [reviews, setReviews] = useState<ReviewDraft[]>([])
-  const [skipped, setSkipped] = useState<SkippedPage[]>([])
+  const [skipped, setSkipped] = useState<Array<SkippedPage & { fileName?: string }>>([])
   const [parseError, setParseError] = useState('')
   /** 导入查重：每条草稿与库中既有隐患的疑似重复命中（按草稿 key） */
   const [dupByKey, setDupByKey] = useState<Record<string, SimilarCase[]>>({})
@@ -131,25 +134,40 @@ export default function IssueEntry() {
   /** 按风险等级的默认整改期限（天）：即知即改当天 */
   const DEADLINE_DAYS: Record<RiskLevel, number> = { critical: 3, general: 15, immediate: 0 }
 
-  const onPickFile = async (file: File) => {
-    const source = detectSource(file.name)
-    if (!source) return
+  /** 批量解析：逐个文件在 Worker 后台解析，结果合并进同一暂存区（草稿 key 加文件名前缀防冲突） */
+  const onPickFiles = async (files: File[]) => {
+    const usable = files.filter((f) => detectSource(f.name))
+    if (!usable.length) return
     setParsing(true)
     setParseStage('读取文件中…')
     setParseError('')
     setDrafts([])
     setReviews([])
     setSkipped([])
-    setSourceFile(null)
+    setSourceFiles([])
+    setDupByKey({})
+    setDupOpen(null)
     try {
-      // 解析在 Web Worker 后台线程执行：大文件解析期间页面不卡死、进度实时可见
-      const { drafts: parsed, reviews: parsedReviews, skipped: parsedSkipped } = await parseFileOffthread(
-        file,
-        (done, total) => setParseStage(`识别页面 ${done}/${total}…`),
-      )
+      const allDrafts: IssueDraft[] = []
+      const allReviews: ReviewDraft[] = []
+      const allSkipped: Array<SkippedPage & { fileName?: string }> = []
+      const filesMeta: Array<{ name: string; source: IssueSource }> = []
+      for (let i = 0; i < usable.length; i++) {
+        const file = usable[i]
+        const source = detectSource(file.name)!
+        // 解析在 Web Worker 后台线程执行：大文件解析期间页面不卡死、进度实时可见
+        const { drafts: parsed, reviews: parsedReviews, skipped: parsedSkipped } = await parseFileOffthread(
+          file,
+          (done, total) => setParseStage(`第 ${i + 1}/${usable.length} 个文件：识别页面 ${done}/${total}…`),
+        )
+        filesMeta.push({ name: file.name, source })
+        allDrafts.push(...parsed.map((d) => ({ ...d, key: `${file.name}#${d.key}`, fileName: file.name })))
+        allReviews.push(...parsedReviews.map((r) => ({ ...r, key: `${file.name}#${r.key}`, fileName: file.name })))
+        allSkipped.push(...parsedSkipped.map((s) => ({ ...s, fileName: file.name })))
+      }
       // 自动建档：猜测的车间/类型名与标签库匹配，没有则幂等创建后关联
       const withTags = await Promise.all(
-        parsed.map(async (d) => ({
+        allDrafts.map(async (d) => ({
           ...d,
           categoryId: d.categoryGuess
             ? (tags.find((t) => t.group === 'category' && t.name === d.categoryGuess)?.id
@@ -163,17 +181,15 @@ export default function IssueEntry() {
       )
       // 复查核销：在库中未闭环隐患里模糊匹配对应项
       const openIssues = issues.filter((i) => i.status !== 'closed')
-      const withMatch = parsedReviews.map((r) => {
+      const withMatch = allReviews.map((r) => {
         const m = matchReview(r, openIssues, tags)
         return { ...r, matchedIssueId: m?.issueId, matchedIssueTitle: m?.issueTitle }
       })
-      setSourceFile({ name: file.name, source })
+      setSourceFiles(filesMeta)
       setDrafts(withTags)
       setReviews(withMatch)
-      setSkipped(parsedSkipped)
+      setSkipped(allSkipped)
       // 导入查重：草稿全部入暂存区后，批量比对库中既有隐患，疑似重复的标记出来（不阻断导入，后台完成）
-      setDupByKey({})
-      setDupOpen(null)
       api<{ ready: boolean; results: SimilarCase[][] }>('/knowledge/similar-batch', {
         method: 'POST',
         body: JSON.stringify({ texts: withTags.map((d) => `${d.title}\n${d.description}`), limit: 2 }),
@@ -196,10 +212,12 @@ export default function IssueEntry() {
   }
 
   const confirmImport = async () => {
-    if (!sourceFile || importing) return
+    if (!sourceFiles.length || importing) return
     const accepted = drafts.filter((d) => d.accepted)
     const acceptedReviews = reviews.filter((r) => r.accepted && r.matchedIssueId)
     if (!accepted.length && !acceptedReviews.length) return
+    // 文件名 → 解析类型映射（批量导入时各文件类型可能不同）
+    const sourceOf = (name?: string) => sourceFiles.find((f) => f.name === name)?.source ?? 'pptx'
     setImporting(true)
     try {
       if (accepted.length) {
@@ -218,14 +236,16 @@ export default function IssueEntry() {
               riskLevel: d.riskLevel,
               status: 'pending' as const,
               scope: managed ? ('managed' as const) : ('reference' as const),
-              source: sourceFile.source,
-              sourceFile: sourceFile.name,
+              source: sourceOf(d.fileName),
+              sourceFile: d.fileName,
               reporter: '当前用户',
               foundAt,
               photos,
               recheckIntervalDays: 7,
               recheckRequired: 3,
               rechecks: [],
+              // AI 批量识别入库：标记为人工未复核，复核后改 true
+              reviewed: false,
               // 参考件不设整改期限，不进入闭环与提醒
               deadline: managed
                 ? new Date(new Date(foundAt).getTime() + DEADLINE_DAYS[d.riskLevel] * 86_400_000).toISOString()
@@ -242,14 +262,14 @@ export default function IssueEntry() {
         updateIssue(r.matchedIssueId!, {
           status: 'closed',
           closedAt: r.closedAtGuess ?? new Date().toISOString(),
-          fixNote: `复查核销：据《${sourceFile.name}》复查页，${r.conclusion}`,
+          fixNote: `复查核销：据《${r.fileName ?? sourceFiles[0]?.name}》复查页，${r.conclusion}`,
           photos: [...(target?.photos ?? []), ...added].slice(0, 9),
         })
       }
       setDrafts([])
       setReviews([])
       setSkipped([])
-      setSourceFile(null)
+      setSourceFiles([])
       setDupByKey({})
       setDupOpen(null)
       navigate('/issues')
@@ -520,13 +540,17 @@ export default function IssueEntry() {
             className="w-full border-2 border-dashed border-neutral-200 rounded-2xl py-10 flex flex-col items-center gap-2 text-neutral-500 hover:border-[#007AFF]/50 hover:text-[#007AFF] transition-colors"
           >
             {parsing ? <Loader2 className="w-6 h-6 animate-spin" /> : <FileUp className="w-6 h-6" />}
-            <span className="text-[14px]">{parsing ? `${parseStage || '解析中…'}（后台解析，页面可正常操作）` : '点击选择 PPT / Word / Excel 文件'}</span>
-            <span className="text-[12px] text-neutral-400">解析结果进入暂存区，确认后才入库</span>
+            <span className="text-[14px]">{parsing ? `${parseStage || '解析中…'}（后台解析，页面可正常操作）` : '点击选择 PPT / Word / Excel 文件（支持多选批量导入）'}</span>
+            <span className="text-[12px] text-neutral-400">解析结果进入暂存区，确认后才入库；批量识别入库的隐患标记为「人工未复核」</span>
           </button>
           <input
-            ref={fileRef} type="file" className="hidden"
+            ref={fileRef} type="file" className="hidden" multiple
             accept=".ppt,.pptx,.doc,.docx,.xls,.xlsx,.csv"
-            onChange={(e) => e.target.files?.[0] && onPickFile(e.target.files[0])}
+            onChange={(e) => {
+              const picked = Array.from(e.target.files ?? [])
+              if (picked.length) onPickFiles(picked)
+              e.target.value = ''
+            }}
           />
 
           {/* 解析失败提示 */}
@@ -537,9 +561,16 @@ export default function IssueEntry() {
           {/* 暂存区 */}
           {(drafts.length > 0 || reviews.length > 0) && (
             <div className="space-y-3">
-              <div className="text-[13px] text-neutral-500">
-                来自 <span className="text-neutral-800 font-medium">{sourceFile?.name}</span>，
-                识别出 {drafts.length} 条隐患{reviews.length > 0 && `、${reviews.length} 条复查核销`}，勾选确认生效的条目：
+              <div className="text-[13px] text-neutral-500 space-y-1">
+                <div>
+                  来自 <span className="text-neutral-800 font-medium">{sourceFiles.length} 个文件</span>，
+                  识别出 {drafts.length} 条隐患{reviews.length > 0 && `、${reviews.length} 条复查核销`}，勾选确认生效的条目：
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {sourceFiles.map((f) => (
+                    <span key={f.name} className="px-2 py-0.5 rounded-md bg-neutral-100 text-[11px] text-neutral-500">{f.name}</span>
+                  ))}
+                </div>
               </div>
 
               {/* 未识别页面：列出页码与内容预览，人工核对是否有漏网隐患 */}
@@ -550,7 +581,10 @@ export default function IssueEntry() {
                   </summary>
                   <ul className="mt-2 space-y-1.5">
                     {skipped.map((s) => (
-                      <li key={s.page} className="text-[12px] text-neutral-500 flex gap-2">
+                      <li key={`${s.fileName}#${s.page}`} className="text-[12px] text-neutral-500 flex gap-2">
+                        {s.fileName && sourceFiles.length > 1 && (
+                          <span className="shrink-0 text-neutral-400 max-w-40 truncate">{s.fileName}</span>
+                        )}
                         <span className="shrink-0 font-medium text-neutral-600">第 {s.page} 页</span>
                         <span className="shrink-0 text-[#B25000]">{s.reason}</span>
                         {s.preview && <span className="truncate">{s.preview}…</span>}
@@ -588,6 +622,11 @@ export default function IssueEntry() {
                           <span className={`px-2 py-0.5 rounded-md text-[11px] font-medium ${isManagedWorkshop(d.locationGuess) ? 'bg-[#007AFF]/12 text-[#007AFF]' : 'bg-neutral-500/10 text-neutral-500'}`}>
                             {isManagedWorkshop(d.locationGuess) ? '成品车间 · 纳入闭环' : '其他车间 · 仅参考'}
                           </span>
+                          {sourceFiles.length > 1 && d.fileName && (
+                            <span className="px-2 py-0.5 rounded-md bg-neutral-100 text-[11px] text-neutral-400 max-w-48 truncate" title={d.fileName}>
+                              {d.fileName}
+                            </span>
+                          )}
                           <select
                             className="text-[12px] bg-neutral-100 rounded-md px-2 py-1 outline-none"
                             value={d.categoryId ?? ''}

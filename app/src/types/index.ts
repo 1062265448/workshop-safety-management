@@ -64,6 +64,8 @@ export interface SafetyIssue {
   systemCause?: string
   /** 回收站：删除时间 ISO（有值表示已删除，可恢复） */
   deletedAt?: string | null
+  /** 人工复核标记：手动录入为 true；AI 批量识别入库为 false，复核后改 true */
+  reviewed?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -163,6 +165,8 @@ export interface IssueDraft {
   locationId?: string
   /** 从通报对应页提取的现场照片（确认入库时上传） */
   photos?: File[]
+  /** 批量导入时来源文件名（用于按文件归类与入库 sourceFile） */
+  fileName?: string
 }
 
 /** 督查通报"复查核销页"解析记录：用于自动闭环库中对应隐患 */
@@ -186,4 +190,6 @@ export interface ReviewDraft {
   matchedIssueTitle?: string
   /** 复查页提取的整改后照片（核销确认时追加到命中隐患） */
   photos?: File[]
+  /** 批量导入时来源文件名 */
+  fileName?: string
 }

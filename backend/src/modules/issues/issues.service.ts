@@ -10,6 +10,7 @@ const WRITABLE = [
   'foundAt', 'deadline', 'closedAt', 'fixNote', 'photos',
   'recheckIntervalDays', 'rechecks',
   'team', 'gridOperator', 'gridOwner', 'systemOwner', 'systemCause',
+  'reviewed',
 ] as const
 
 function pick(body: Record<string, unknown>): Prisma.IssueUncheckedCreateInput {

@@ -52,6 +52,8 @@ model Issue {
   systemCause   String?
   /// 回收站：删除时间（null=正常；有值=已删除可恢复，查询默认排除）
   deletedAt   DateTime?
+  /// 人工复核标记：手动录入默认已复核；AI 批量识别入库的为 false，人工复核后改 true
+  reviewed    Boolean  @default(true)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 

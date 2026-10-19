@@ -21,6 +21,7 @@ export default function IssueList() {
   const [categoryId, setCategoryId] = useState('')
   const [locationId, setLocationId] = useState('')
   const [scope, setScope] = useState<'' | 'managed' | 'reference'>('managed')
+  const [reviewed, setReviewed] = useState<'' | 'unreviewed' | 'reviewed'>('')
   /** 回收站弹窗 */
   const [binOpen, setBinOpen] = useState(false)
   const [binItems, setBinItems] = useState<SafetyIssue[]>([])
@@ -72,8 +73,9 @@ export default function IssueList() {
         .filter((i) => !status || i.status === status)
         .filter((i) => !categoryId || i.categoryId === categoryId)
         .filter((i) => !locationId || i.locationId === locationId)
+        .filter((i) => !reviewed || (reviewed === 'unreviewed' ? i.reviewed === false : i.reviewed !== false))
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-    [issues, q, status, categoryId, locationId, scope],
+    [issues, q, status, categoryId, locationId, scope, reviewed],
   )
 
   const transition = (issue: SafetyIssue) => {
@@ -257,6 +259,11 @@ export default function IssueList() {
           <option value="">全部区域</option>
           {locations.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
         </select>
+        <select className={selectCls} value={reviewed} onChange={(e) => setReviewed(e.target.value as '' | 'unreviewed' | 'reviewed')}>
+          <option value="">全部复核状态</option>
+          <option value="unreviewed">人工未复核</option>
+          <option value="reviewed">人工已复核</option>
+        </select>
       </div>
 
       {/* 列表 */}
@@ -291,6 +298,11 @@ export default function IssueList() {
                   )
                 })()}
                 <RiskBadge level={i.riskLevel} />
+                {i.reviewed === false && (
+                  <span className="px-2 py-0.5 rounded-md text-[12px] font-medium bg-[#FF9500]/12 text-[#B25000]" title="批量识别导入，尚未人工复核">
+                    未复核
+                  </span>
+                )}
                 <StatusBadge status={i.status} overdue={isOverdue(i)} />
                 {/* 网格责任人重复提醒：2 次橙色提醒，≥3 次红色严重提醒（加倍考核） */}
                 {i.gridOwner && (() => {
@@ -338,6 +350,16 @@ export default function IssueList() {
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              {i.reviewed === false && (
+                <button
+                  onClick={() => updateIssue(i.id, { reviewed: true })}
+                  title="人工复核无误后标记"
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-[#FF9500]/12 text-[#B25000] text-[12px] font-medium hover:bg-[#FF9500]/25 transition-colors"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  标记已复核
+                </button>
+              )}
               {/* 参考件不进入整改闭环，不显示状态流转按钮 */}
               {i.scope !== 'reference' && NEXT_ACTION[i.status] && (
                 <button
@@ -397,6 +419,16 @@ export default function IssueList() {
                     <span className="px-2 py-0.5 rounded-md text-[12px] font-medium bg-neutral-500/10 text-neutral-500">参考</span>
                   )}
                   <RiskBadge level={detailIssue.riskLevel} />
+                  {detailIssue.reviewed === false && (
+                    <button
+                      onClick={() => updateIssue(detailIssue.id, { reviewed: true })}
+                      title="批量识别导入，人工复核无误后点击标记"
+                      className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[12px] font-medium bg-[#FF9500]/12 text-[#B25000] hover:bg-[#FF9500]/25 transition-colors"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      未复核 · 点击标记已复核
+                    </button>
+                  )}
                   <StatusBadge status={detailIssue.status} overdue={isOverdue(detailIssue)} />
                   <span className="text-[11px] text-neutral-400">{SOURCE_LABEL[detailIssue.source]}</span>
                 </div>
