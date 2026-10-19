@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { FileUp, Loader2, CheckSquare, Square, ClipboardCheck, ImagePlus, X, ChevronDown, ChevronRight } from 'lucide-react'
+import { FileUp, Loader2, CheckSquare, Square, ClipboardCheck, ImagePlus, ThumbsUp, X, ChevronDown, ChevronRight } from 'lucide-react'
 import { uploadPhotos, useStore } from '@/lib/store'
 import { isManagedWorkshop, TEAMS, countGridOwners, withSubTags } from '@/lib/config'
 import { detectSource, parseFileOffthread, type SkippedPage } from '@/lib/import/parsers'
@@ -36,6 +36,7 @@ export default function IssueEntry() {
     riskLevel: 'general' as RiskLevel, assignee: '', deadline: '',
     team: '', gridOperator: '', gridOwner: '', systemOwner: '', systemCause: '',
     causeType: '' as '' | CauseType, countermeasureLevel: '' as '' | CountermeasureLevel, countermeasureReason: '',
+    isGood: false,
   })
   /** 根因校验：系统原因选「管理」对策时必须说明为什么机制和技术做不到 */
   const reasonMissing = form.causeType === 'system' && form.countermeasureLevel === 'management' && !form.countermeasureReason.trim()
@@ -116,6 +117,8 @@ export default function IssueEntry() {
         stage: 'rechecking',
         // 手动录入即人工复核
         reviewed: true,
+        // 正面典型（做得好）：不走整改闭环，自动沉淀知识库「好做法」
+        isGood: form.isGood,
       })
       navigate('/issues')
     } finally {
@@ -583,7 +586,20 @@ export default function IssueEntry() {
           </section>
 
           {/* 提交 */}
-          <div className="flex justify-end pb-2">
+          <div className="flex items-center justify-end gap-4 pb-2">
+            {/* 正面典型：做得好的做法，不进整改闭环，自动沉淀到知识库「好做法」 */}
+            <button
+              type="button"
+              onClick={() => setForm({ ...form, isGood: !form.isGood })}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-[13px] font-medium transition-colors ${
+                form.isGood
+                  ? 'bg-[#34C759] text-white'
+                  : 'text-[#248A3D] border border-[#34C759]/40 hover:bg-[#34C759]/8'
+              }`}
+            >
+              <ThumbsUp className="w-3.5 h-3.5" />
+              {form.isGood ? '已选好做法（正面典型）' : '这是好做法（正面典型）'}
+            </button>
             <button
               onClick={submitManual}
               disabled={!form.title.trim() || reasonMissing || submitting}

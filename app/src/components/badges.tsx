@@ -1,4 +1,4 @@
-import type { CauseType, CountermeasureLevel, IssueSource, IssueStage, IssueStatus, RiskLevel } from '@/types'
+import type { CauseType, CountermeasureLevel, IssueSource, IssueStage, IssueStatus, RegulationCategory, RiskLevel } from '@/types'
 import { cn } from '@/lib/utils'
 
 export const RISK_LABEL: Record<RiskLevel, string> = { general: '一般', critical: '重大', immediate: '即知即改' }
@@ -31,6 +31,23 @@ export const STAGE_LABEL: Record<IssueStage, string> = {
   done: '闭环完成',
 }
 export const STAGE_ORDER: IssueStage[] = ['rechecking', 'institutionalizing', 'educating', 'executing', 'done']
+
+/** 法规分类徽标（问题库法规依据 / 知识库法规制度页共用） */
+export const REG_CATEGORY_LABEL: Record<RegulationCategory, string> = {
+  national_law: '国家法律',
+  regulation: '行政法规',
+  gb_standard: '国家标准',
+  group_policy: '集团制度',
+  factory_policy: '厂级制度',
+}
+export const REG_CATEGORY_META: Record<RegulationCategory, { label: string; cls: string }> = {
+  national_law: { label: '国家法律', cls: 'bg-[#FF3B30]/10 text-[#D70015]' },
+  regulation: { label: '行政法规', cls: 'bg-[#FF9500]/12 text-[#B25000]' },
+  gb_standard: { label: '国家标准', cls: 'bg-[#007AFF]/10 text-[#007AFF]' },
+  group_policy: { label: '集团制度', cls: 'bg-[#AF52DE]/10 text-[#8944AB]' },
+  factory_policy: { label: '厂级制度', cls: 'bg-[#34C759]/12 text-[#248A3D]' },
+}
+export const REG_CATEGORY_ORDER: RegulationCategory[] = ['national_law', 'regulation', 'gb_standard', 'group_policy', 'factory_policy']
 
 export function RiskBadge({ level }: { level: RiskLevel }) {
   return <span className={cn('px-2 py-0.5 rounded-md text-[12px] font-medium', RISK_COLOR[level])}>{RISK_LABEL[level]}</span>

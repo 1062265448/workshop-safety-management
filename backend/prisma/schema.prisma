@@ -66,10 +66,44 @@ model Issue {
   deletedAt   DateTime?
   /// 人工复核标记：手动录入默认已复核；AI 批量识别入库的为 false，人工复核后改 true
   reviewed    Boolean  @default(true)
+  /// 正面典型（做得好）：不计入整改闭环/超期提醒/重复考核，自动沉淀进知识库「好做法」
+  isGood      Boolean  @default(false)
+  /// isGood=true 时自动创建的知识库「好做法」文档 id（取消标记时随之删除）
+  linkedGoodDocId String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+  issueRegulations IssueRegulation[]
 
   @@map("issues")
+}
+
+/// 法规制度库：国家法律 / 行政法规 / 国家标准 / 集团制度 / 厂级制度
+model Regulation {
+  id        String   @id @default(cuid())
+  /// national_law 国家法律 | regulation 行政法规/部门规章 | gb_standard 国家标准 | group_policy 集团制度 | factory_policy 厂级制度
+  category  String
+  title     String
+  /// 条款号（可空，关联到文件级别时为空）
+  articleNo String?
+  /// 内容摘要（关键内容）
+  summary   String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  issues    IssueRegulation[]
+
+  @@map("regulations")
+}
+
+/// 隐患-法规依据多对多关联
+model IssueRegulation {
+  id           String     @id @default(cuid())
+  issueId      String
+  issue        Issue      @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  regulationId String
+  regulation   Regulation @relation(fields: [regulationId], references: [id], onDelete: Cascade)
+
+  @@unique([issueId, regulationId])
+  @@map("issue_regulations")
 }
 
 /// 参考件问题标注：评估其他车间问题对成品车间的参考意义（一隐患一条）
@@ -201,8 +235,27 @@ model KnowledgeDoc {
   source    String   @default("")
   createdAt DateTime @default(now())
   chunks    KnowledgeChunk[]
+  versions  KnowledgeDocVersion[]
 
   @@map("knowledge_docs")
+}
+
+/// 知识库文档历史版本：每次编辑保存前把旧内容快照存为一个版本（首次创建不存）
+model KnowledgeDocVersion {
+  id        String       @id @default(cuid())
+  docId     String
+  doc       KnowledgeDoc @relation(fields: [docId], references: [id], onDelete: Cascade)
+  /// 递增整数版本号（从 1 开始，每篇文档独立编号）
+  version   Int
+  title     String
+  /// 旧正文快照（chunks 按序拼接）
+  content   String       @default("")
+  /// 修订说明
+  note      String       @default("")
+  createdAt DateTime     @default(now())
+
+  @@unique([docId, version])
+  @@map("knowledge_doc_versions")
 }
 
 /// 知识库切片：语义检索的最小单元，embedding 为 bge-large-zh 1024 维向量

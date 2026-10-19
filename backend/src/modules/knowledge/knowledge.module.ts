@@ -3,7 +3,7 @@
 // 提供语义检索 + AI 问答（LLM 未配置 Key 时只返回检索结果）
 // 重建索引为后台任务：POST /reindex 立即返回，GET /reindex/status 轮询进度
 // ─────────────────────────────────────────────────────────────
-import { Body, Controller, Get, Module, Post, Put, Query } from '@nestjs/common'
+import { Body, Controller, Get, Module, NotFoundException, Param, Post, Put, Query } from '@nestjs/common'
 import { Injectable, BadRequestException } from '@nestjs/common'
 import { readdirSync, readFileSync, existsSync } from 'fs'
 import { join, resolve } from 'path'
@@ -148,11 +148,29 @@ export class KnowledgeService {
     }
   }
 
-  /** 汇总待入库文档：历史隐患（含整改记录与参考标注）+ 督查通报原文 */
+  /** 好做法文档草稿（isGood=true 的正面典型，kind=practice 与隐患案例区分） */
+  private buildGoodDraft(issue: IssueRow, tagName: Map<string, string>): DocDraft {
+    const lines = [
+      `标题：${issue.title}`,
+      `车间/区域：${issue.locationId ? tagName.get(issue.locationId) ?? '' : '未标注'}`,
+      `类型：${issue.categoryId ? tagName.get(issue.categoryId) ?? '' : '未标注'}`,
+      `发现时间：${issue.foundAt.toISOString().slice(0, 10)}`,
+      issue.description && `好做法描述：${issue.description}`,
+    ]
+    return {
+      kind: 'practice',
+      refId: issue.id,
+      title: issue.title,
+      source: `好做法 · ${issue.scope === 'managed' ? '成品车间' : '其他车间通报'} · ${issue.source === 'manual' ? '手动录入' : issue.sourceFile ?? issue.source}`,
+      chunks: splitText(lines.filter(Boolean).join('\n')),
+    }
+  }
+
+  /** 汇总待入库文档：历史隐患（含整改记录与参考标注）+ 好做法 + 督查通报原文 */
   private async collectDocs(): Promise<DocDraft[]> {
     const drafts: DocDraft[] = []
 
-    // 1. 隐患案例库（最有价值：每条都带整改措施与复查记录）
+    // 1. 隐患案例库（最有价值：每条都带整改措施与复查记录）；正面典型单独入「好做法」
     const [issues, tags, annotations] = await Promise.all([
       this.prisma.issue.findMany({ where: { deletedAt: null }, orderBy: { foundAt: 'desc' } }),
       this.prisma.tag.findMany(),
@@ -161,7 +179,8 @@ export class KnowledgeService {
     const tagName = new Map(tags.map((t) => [t.id, t.name]))
     const annByIssue = new Map(annotations.map((a) => [a.issueId, a]))
     for (const issue of issues) {
-      drafts.push(this.buildIssueDraft(issue, tagName, annByIssue.get(issue.id)))
+      if (issue.isGood) drafts.push(this.buildGoodDraft(issue, tagName))
+      else drafts.push(this.buildIssueDraft(issue, tagName, annByIssue.get(issue.id)))
     }
 
     // 2. 督查通报原件（厂督察通报目录下的 pptx，按页切片）
@@ -181,11 +200,13 @@ export class KnowledgeService {
     return drafts
   }
 
-  /** 批量嵌入切片并写库（全量重建与增量同步共用） */
+  /** 批量嵌入切片并写库（全量重建与增量同步共用）；嵌入模型未就绪时退化为 NULL 向量（只存文本，暂不参与语义检索） */
   private async embedAndInsert(flat: { docId: string; seq: number; content: string }[], onProgress?: (done: number) => void) {
     for (let i = 0; i < flat.length; i += EMBED_BATCH) {
       const batch = flat.slice(i, i + EMBED_BATCH)
-      const vectors = await this.embedding.embed(batch.map((b) => b.content))
+      const vectors: (number[] | null)[] = this.embedding.ready
+        ? await this.embedding.embed(batch.map((b) => b.content))
+        : batch.map(() => null)
       for (let j = 0; j < batch.length; j++) {
         await this.prisma.$executeRawUnsafe(
           `INSERT INTO knowledge_chunks (id, "docId", seq, content, embedding) VALUES ($1, $2, $3, $4, $5::vector)`,
@@ -193,7 +214,7 @@ export class KnowledgeService {
           batch[j].docId,
           batch[j].seq,
           batch[j].content,
-          `[${vectors[j].join(',')}]`,
+          vectors[j] ? `[${vectors[j]!.join(',')}]` : null,
         )
       }
       onProgress?.(Math.min(i + EMBED_BATCH, flat.length))
@@ -213,10 +234,11 @@ export class KnowledgeService {
       ])
       const tagName = new Map(tags.map((t) => [t.id, t.name]))
       const annByIssue = new Map(annotations.map((a) => [a.issueId, a]))
-      // 先清旧文档（chunks 级联删除），再按最新内容重建
+      // 先清旧文档（chunks 级联删除），再按最新内容重建；好做法文档由 syncGoodDoc 单独维护
       await this.prisma.knowledgeDoc.deleteMany({ where: { kind: 'issue', refId: { in: unique } } })
       const flat: { docId: string; seq: number; content: string }[] = []
       for (const issue of issues) {
+        if (issue.isGood) continue // 正面典型不入隐患案例库，见 syncGoodDoc
         const draft = this.buildIssueDraft(issue, tagName, annByIssue.get(issue.id))
         const doc = await this.prisma.knowledgeDoc.create({
           data: { kind: draft.kind, refId: draft.refId, title: draft.title, source: draft.source },
@@ -229,14 +251,47 @@ export class KnowledgeService {
     }
   }
 
-  /** 增量删除：隐患进回收站或彻底删除时移除其向量文档 */
+  /** 增量删除：隐患进回收站或彻底删除时移除其向量文档（含好做法文档） */
   async removeIssueDocs(ids: string[]) {
     const unique = [...new Set(ids)].filter(Boolean)
     if (unique.length === 0) return
     try {
-      await this.prisma.knowledgeDoc.deleteMany({ where: { kind: 'issue', refId: { in: unique } } })
+      await this.prisma.knowledgeDoc.deleteMany({ where: { kind: { in: ['issue', 'practice'] }, refId: { in: unique } } })
     } catch (e) {
       console.warn('[knowledge] 增量删除向量文档失败:', (e as Error).message)
+    }
+  }
+
+  /**
+   * 好做法联动：isGood=true 时创建/重建知识库「好做法」文档并回写 issue.linkedGoodDocId；
+   * 取消标记（或条目已删除）时移除该文档并清空关联。返回最新的 linkedGoodDocId（null=无）。
+   * 嵌入模型未就绪时退化为纯文本切片（不入语义检索，重建索引后自动补向量）。
+   */
+  async syncGoodDoc(issueId: string): Promise<string | null> {
+    try {
+      const issue = await this.prisma.issue.findUnique({ where: { id: issueId } })
+      if (!issue) return null
+      await this.prisma.knowledgeDoc.deleteMany({ where: { kind: 'practice', refId: issueId } })
+      if (!issue.isGood || issue.deletedAt) {
+        if (issue.linkedGoodDocId) {
+          await this.prisma.issue.update({ where: { id: issueId }, data: { linkedGoodDocId: null } })
+        }
+        return null
+      }
+      const tags = await this.prisma.tag.findMany()
+      const tagName = new Map(tags.map((t) => [t.id, t.name]))
+      const draft = this.buildGoodDraft(issue, tagName)
+      const doc = await this.prisma.knowledgeDoc.create({
+        data: { kind: draft.kind, refId: draft.refId, title: draft.title, source: draft.source },
+      })
+      await this.embedAndInsert(draft.chunks.map((content, seq) => ({ docId: doc.id, seq, content })))
+      if (issue.linkedGoodDocId !== doc.id) {
+        await this.prisma.issue.update({ where: { id: issueId }, data: { linkedGoodDocId: doc.id } })
+      }
+      return doc.id
+    } catch (e) {
+      console.warn('[knowledge] 好做法文档同步失败:', (e as Error).message)
+      return null
     }
   }
 
@@ -269,6 +324,10 @@ export class KnowledgeService {
       const doc = await this.prisma.knowledgeDoc.create({
         data: { kind: draft.kind, refId: draft.refId, title: draft.title, source: draft.source },
       })
+      // 全量重建会换好做法文档 id，回写 issue.linkedGoodDocId 保持关联有效
+      if (draft.kind === 'practice' && draft.refId) {
+        await this.prisma.issue.update({ where: { id: draft.refId }, data: { linkedGoodDocId: doc.id } }).catch(() => undefined)
+      }
       draft.chunks.forEach((content, seq) => flat.push({ docId: doc.id, seq, content }))
     }
     this.job.total = flat.length
@@ -376,6 +435,102 @@ export class KnowledgeService {
     }
     return { ready: true, results }
   }
+
+  // ── 文档管理与版本历史 ─────────────────────────────────────
+
+  /** 文档列表（知识库页「文档」页签）：可按 kind / 标题关键词筛选 */
+  async listDocs(filters: { kind?: string; q?: string }) {
+    const where: Record<string, unknown> = {}
+    if (filters.kind) where.kind = filters.kind
+    if (filters.q?.trim()) where.title = { contains: filters.q.trim() }
+    const docs = await this.prisma.knowledgeDoc.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: 300,
+      include: { _count: { select: { chunks: true, versions: true } } },
+    })
+    return docs.map((d) => ({
+      id: d.id,
+      kind: d.kind,
+      refId: d.refId,
+      title: d.title,
+      source: d.source,
+      createdAt: d.createdAt,
+      chunks: d._count.chunks,
+      versions: d._count.versions,
+    }))
+  }
+
+  /** 文档详情：正文 = 切片按序拼接 */
+  async docDetail(id: string) {
+    const doc = await this.prisma.knowledgeDoc.findUnique({
+      where: { id },
+      include: { chunks: { orderBy: { seq: 'asc' }, select: { content: true } } },
+    })
+    if (!doc) throw new NotFoundException(`KnowledgeDoc ${id} not found`)
+    return {
+      id: doc.id,
+      kind: doc.kind,
+      refId: doc.refId,
+      title: doc.title,
+      source: doc.source,
+      createdAt: doc.createdAt,
+      content: doc.chunks.map((c) => c.content).join('\n'),
+    }
+  }
+
+  /**
+   * 编辑保存：先把旧内容快照存为一个版本（首次创建不存版本），
+   * 再更新标题并重建切片索引；内容无变化时不落版本、不动索引。
+   */
+  async updateDoc(id: string, body: { title?: string; content?: string; note?: string }) {
+    const doc = await this.prisma.knowledgeDoc.findUnique({
+      where: { id },
+      include: { chunks: { orderBy: { seq: 'asc' }, select: { content: true } } },
+    })
+    if (!doc) throw new NotFoundException(`KnowledgeDoc ${id} not found`)
+    const title = body.title?.trim() || doc.title
+    const oldContent = doc.chunks.map((c) => c.content).join('\n')
+    // content 未传 = 不改正文（避免只改标题时把正文清空）
+    const content = body.content !== undefined ? body.content.trim() : oldContent
+    if (title === doc.title && content === oldContent) return this.docDetail(id)
+
+    // 1. 旧内容快照为历史版本（版本号按文档递增）
+    const maxV = await this.prisma.knowledgeDocVersion.aggregate({ where: { docId: id }, _max: { version: true } })
+    await this.prisma.knowledgeDocVersion.create({
+      data: {
+        docId: id,
+        version: (maxV._max.version ?? 0) + 1,
+        title: doc.title,
+        content: oldContent,
+        note: body.note?.trim() ?? '',
+      },
+    })
+
+    // 2. 更新文档标题并重建切片（重新嵌入，保持语义检索一致）
+    await this.prisma.knowledgeDoc.update({ where: { id }, data: { title } })
+    await this.prisma.knowledgeChunk.deleteMany({ where: { docId: id } })
+    await this.embedAndInsert(splitText(content).map((c, seq) => ({ docId: id, seq, content: c })))
+    return this.docDetail(id)
+  }
+
+  /** 版本列表（新→旧，不含正文，列表页够用） */
+  async docVersions(id: string) {
+    const doc = await this.prisma.knowledgeDoc.findUnique({ where: { id }, select: { id: true } })
+    if (!doc) throw new NotFoundException(`KnowledgeDoc ${id} not found`)
+    return this.prisma.knowledgeDocVersion.findMany({
+      where: { docId: id },
+      orderBy: { version: 'desc' },
+      select: { id: true, version: true, title: true, note: true, createdAt: true },
+    })
+  }
+
+  /** 单版本详情（含正文快照） */
+  async docVersion(id: string, vid: string) {
+    const version = await this.prisma.knowledgeDocVersion.findFirst({ where: { docId: id, id: vid } })
+    if (!version) throw new NotFoundException(`Version ${vid} not found`)
+    return version
+  }
 }
 
 @Controller('knowledge')
@@ -421,6 +576,36 @@ export class KnowledgeController {
   @Get('search')
   search(@Query('q') q: string, @Query('limit') limit?: string) {
     return this.svc.search(q ?? '', limit ? Number(limit) : 8)
+  }
+
+  /** 文档列表（可按 kind / 标题关键词筛选） */
+  @Get('docs')
+  listDocs(@Query('kind') kind?: string, @Query('q') q?: string) {
+    return this.svc.listDocs({ kind, q })
+  }
+
+  /** 文档详情（正文 = 切片按序拼接） */
+  @Get('docs/:id')
+  docDetail(@Param('id') id: string) {
+    return this.svc.docDetail(id)
+  }
+
+  /** 编辑保存：先把旧内容快照为历史版本，再更新并重建索引 */
+  @Put('docs/:id')
+  updateDoc(@Param('id') id: string, @Body() body: { title?: string; content?: string; note?: string }) {
+    return this.svc.updateDoc(id, body ?? {})
+  }
+
+  /** 版本列表（新→旧） */
+  @Get('docs/:id/versions')
+  docVersions(@Param('id') id: string) {
+    return this.svc.docVersions(id)
+  }
+
+  /** 单版本详情（含正文快照） */
+  @Get('docs/:id/versions/:vid')
+  docVersion(@Param('id') id: string, @Param('vid') vid: string) {
+    return this.svc.docVersion(id, vid)
   }
 
   /** 录入联动：与待录入问题最相似的既有隐患（登录即可用，结果按隐患去重） */

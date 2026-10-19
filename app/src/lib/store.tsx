@@ -44,6 +44,10 @@ interface Store extends State {
   completePlan: (id: string, body: { executor?: string; note?: string; issueIds?: string[] }) => void
   markReminderRead: (id: string) => void
   refreshReminders: () => void
+  /** 关联法规依据（返回带最新关联的隐患并局部更新） */
+  linkRegulation: (issueId: string, regulationId: string) => void
+  /** 取消法规依据关联 */
+  unlinkRegulation: (issueId: string, regulationId: string) => void
   /** 保存参考件标注（upsert，一隐患一条） */
   saveAnnotation: (issueId: string, body: { relevance: string; similarity: string; caution: string; tagId?: string | null }) => void
   /** 清除参考件标注 */
@@ -266,6 +270,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const reminders = await api<Reminder[]>('/reminders')
           setState((p) => ({ ...p, reminders }))
         }),
+      linkRegulation: (issueId, regulationId) =>
+        run(async () => {
+          const updated = await api<SafetyIssue>(`/issues/${issueId}/regulations`, { method: 'POST', body: JSON.stringify({ regulationId }) })
+          setState((p) => ({ ...p, issues: p.issues.map((i) => (i.id === issueId ? updated : i)) }))
+        }),
+      unlinkRegulation: (issueId, regulationId) =>
+        run(async () => {
+          const updated = await api<SafetyIssue>(`/issues/${issueId}/regulations/${regulationId}`, { method: 'DELETE' })
+          setState((p) => ({ ...p, issues: p.issues.map((i) => (i.id === issueId ? updated : i)) }))
+        }),
       saveAnnotation: (issueId, body) =>
         run(async () => {
           const saved = await api<IssueAnnotation>(`/annotations/${issueId}`, { method: 'PUT', body: JSON.stringify(body) })
@@ -300,7 +314,7 @@ export function useStore(): Store {
   return ctx
 }
 
-/** 工具：判断是否逾期 */
+/** 工具：判断是否逾期（已闭环 / 正面典型不算逾期） */
 export function isOverdue(issue: SafetyIssue): boolean {
-  return issue.status !== 'closed' && !!issue.deadline && new Date(issue.deadline).getTime() < Date.now()
+  return !issue.isGood && issue.status !== 'closed' && !!issue.deadline && new Date(issue.deadline).getTime() < Date.now()
 }

@@ -87,8 +87,68 @@ export interface SafetyIssue {
   deletedAt?: string | null
   /** 人工复核标记：手动录入为 true；AI 批量识别入库为 false，复核后改 true */
   reviewed?: boolean
+  /** 正面典型（做得好）：不计入整改闭环/超期提醒，自动沉淀知识库「好做法」 */
+  isGood?: boolean
+  /** isGood=true 时自动创建的知识库「好做法」文档 id */
+  linkedGoodDocId?: string | null
+  /** 关联的法规依据（后端 include 拍平） */
+  regulations?: Regulation[]
   createdAt: string
   updatedAt: string
+}
+
+/** 法规分类：国家法律 / 行政法规 / 国家标准 / 集团制度 / 厂级制度 */
+export type RegulationCategory = 'national_law' | 'regulation' | 'gb_standard' | 'group_policy' | 'factory_policy'
+
+/** 法规制度库条目 */
+export interface Regulation {
+  id: string
+  category: RegulationCategory
+  title: string
+  /** 条款号（可空） */
+  articleNo?: string | null
+  /** 内容摘要 */
+  summary: string
+  createdAt: string
+  updatedAt: string
+}
+
+/** 知识库文档列表项 */
+export interface KnowledgeDocItem {
+  id: string
+  kind: string
+  refId?: string | null
+  title: string
+  source: string
+  createdAt: string
+  chunks: number
+  versions: number
+}
+
+/** 知识库文档详情（正文 = 切片拼接） */
+export interface KnowledgeDocDetail {
+  id: string
+  kind: string
+  refId?: string | null
+  title: string
+  source: string
+  createdAt: string
+  content: string
+}
+
+/** 知识库文档历史版本（列表项，不含正文） */
+export interface KnowledgeDocVersionItem {
+  id: string
+  version: number
+  title: string
+  note: string
+  createdAt: string
+}
+
+/** 知识库文档历史版本详情（含正文快照） */
+export interface KnowledgeDocVersionDetail extends KnowledgeDocVersionItem {
+  docId: string
+  content: string
 }
 
 /** 标签维度组 */

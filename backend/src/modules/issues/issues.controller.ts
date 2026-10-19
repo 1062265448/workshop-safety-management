@@ -53,6 +53,18 @@ export class IssuesController {
     return this.svc.restore(id)
   }
 
+  /** 关联法规依据（幂等） */
+  @Post(':id/regulations')
+  linkRegulation(@Param('id') id: string, @Body() body: { regulationId?: string }) {
+    return this.svc.linkRegulation(id, body?.regulationId)
+  }
+
+  /** 取消法规依据关联 */
+  @Delete(':id/regulations/:rid')
+  unlinkRegulation(@Param('id') id: string, @Param('rid') rid: string) {
+    return this.svc.unlinkRegulation(id, rid)
+  }
+
   @Patch(':id')
   update(@Param('id') id: string, @Body() body: Record<string, unknown>) {
     return this.svc.update(id, body)

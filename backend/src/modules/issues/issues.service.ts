@@ -13,8 +13,17 @@ const WRITABLE = [
   'team', 'gridOperator', 'gridOwner', 'systemOwner', 'systemCause',
   'causeType', 'countermeasureLevel', 'countermeasureReason',
   'institutionNote', 'linkedKnowledgeDocId',
-  'reviewed',
+  'reviewed', 'isGood',
 ] as const
+
+/** 关联法规的 include（列表/详情/关联操作统一） */
+const REG_INCLUDE = { issueRegulations: { include: { regulation: true } } } as const
+
+/** 把 issueRegulations 连接表拍平成 regulations 数组返回给前端 */
+function serialize<T extends { issueRegulations?: { regulation: unknown }[] }>(issue: T): Omit<T, 'issueRegulations'> & { regulations: unknown[] } {
+  const { issueRegulations, ...rest } = issue
+  return { ...rest, regulations: (issueRegulations ?? []).map((ir) => ir.regulation) }
+}
 
 /** 整改闭环阶段顺序（stage 只允许通过 stage/next 接口按序推进） */
 const STAGE_ORDER = ['rechecking', 'institutionalizing', 'educating', 'executing', 'done'] as const
@@ -64,7 +73,7 @@ export class IssuesService {
     }
   }
 
-  findAll(filters: { status?: string; categoryId?: string; locationId?: string; q?: string; bin?: boolean }) {
+  async findAll(filters: { status?: string; categoryId?: string; locationId?: string; q?: string; bin?: boolean }) {
     const where: Prisma.IssueWhereInput = {}
     // 回收站：默认只查正常条目；bin=1 时只查已删除条目
     where.deletedAt = filters.bin ? { not: null } : null
@@ -77,20 +86,24 @@ export class IssuesService {
         { description: { contains: filters.q } },
       ]
     }
-    return this.prisma.issue.findMany({ where, orderBy: { createdAt: 'desc' } })
+    const issues = await this.prisma.issue.findMany({ where, orderBy: { createdAt: 'desc' }, include: REG_INCLUDE })
+    return issues.map(serialize)
   }
 
   async findOne(id: string) {
-    const issue = await this.prisma.issue.findUnique({ where: { id } })
+    const issue = await this.prisma.issue.findUnique({ where: { id }, include: REG_INCLUDE })
     if (!issue) throw new NotFoundException(`Issue ${id} not found`)
-    return issue
+    return serialize(issue)
   }
 
   create(body: Record<string, unknown>) {
     this.checkCountermeasure(body)
-    return this.prisma.issue.create({ data: pick(body) }).then(async (issue) => {
+    return this.prisma.issue.create({ data: pick(body), include: REG_INCLUDE }).then(async (created) => {
+      // 好做法：录入即标记时立即沉淀知识库「好做法」文档（回写 linkedGoodDocId）
+      if (created.isGood) await this.knowledge.syncGoodDoc(created.id)
+      const issue = await this.findOne(created.id)
       await this.refreshGridOwnerReminder(issue.gridOwner)
-      await this.assessments.recordRepeat(issue)
+      if (!issue.isGood) await this.assessments.recordRepeat(issue) // 正面典型不计入重复考核
       void this.knowledge.syncIssues([issue.id]) // 增量索引：新问题实时进知识库
       return issue
     })
@@ -99,21 +112,50 @@ export class IssuesService {
   createBatch(items: Record<string, unknown>[]) {
     for (const item of items) this.checkCountermeasure(item)
     return this.prisma.$transaction(items.map((item) => this.prisma.issue.create({ data: pick(item) }))).then(async (created) => {
+      for (const issue of created) if (issue.isGood) await this.knowledge.syncGoodDoc(issue.id)
       for (const name of new Set(created.map((i) => i.gridOwner))) await this.refreshGridOwnerReminder(name)
-      for (const issue of created) await this.assessments.recordRepeat(issue)
+      for (const issue of created) if (!issue.isGood) await this.assessments.recordRepeat(issue)
       void this.knowledge.syncIssues(created.map((i) => i.id)) // 批量导入一次嵌入，比逐条快一个数量级
-      return created
+      return this.prisma.issue.findMany({ where: { id: { in: created.map((i) => i.id) } }, include: REG_INCLUDE }).then((rows) => rows.map(serialize))
     })
   }
 
   async update(id: string, body: Record<string, unknown>) {
     const before = await this.prisma.issue.findUnique({ where: { id } })
     this.checkCountermeasure(body, before)
-    const issue = await this.prisma.issue.update({ where: { id }, data: pick(body) })
+    await this.prisma.issue.update({ where: { id }, data: pick(body) })
+    // 好做法联动：标记/取消标记，或已标记条目内容变更时，同步知识库「好做法」文档
+    if (before?.isGood || body.isGood !== undefined) await this.knowledge.syncGoodDoc(id)
+    const issue = await this.findOne(id)
     for (const name of new Set([before?.gridOwner, issue.gridOwner])) await this.refreshGridOwnerReminder(name)
-    await this.assessments.recordRepeat(issue)
+    if (!issue.isGood) await this.assessments.recordRepeat(issue)
     void this.knowledge.syncIssues([id]) // 内容/状态/分类变更同步进知识库
     return issue
+  }
+
+  /** 关联法规依据（幂等：已关联不重复插入），返回带最新关联的隐患 */
+  async linkRegulation(id: string, regulationId?: string) {
+    if (!regulationId) throw new BadRequestException('缺少 regulationId')
+    const [issue, regulation] = await Promise.all([
+      this.prisma.issue.findUnique({ where: { id } }),
+      this.prisma.regulation.findUnique({ where: { id: regulationId } }),
+    ])
+    if (!issue) throw new NotFoundException(`Issue ${id} not found`)
+    if (!regulation) throw new NotFoundException(`Regulation ${regulationId} not found`)
+    await this.prisma.issueRegulation.upsert({
+      where: { issueId_regulationId: { issueId: id, regulationId } },
+      create: { issueId: id, regulationId },
+      update: {},
+    })
+    return this.findOne(id)
+  }
+
+  /** 取消法规依据关联，返回带最新关联的隐患 */
+  async unlinkRegulation(id: string, regulationId: string) {
+    const issue = await this.prisma.issue.findUnique({ where: { id } })
+    if (!issue) throw new NotFoundException(`Issue ${id} not found`)
+    await this.prisma.issueRegulation.deleteMany({ where: { issueId: id, regulationId } })
+    return this.findOne(id)
   }
 
   /** 知识库条目下拉选项（制度沉淀阶段关联用；只读查询，不动知识库模块） */
@@ -134,7 +176,8 @@ export class IssuesService {
     const name = gridOwner?.trim()
     if (!name) return
     const count = await this.prisma.issue.count({
-      where: { scope: 'managed', gridOwner: name, deletedAt: null },
+      // 正面典型（做得好）不算责任人的重复问题
+      where: { scope: 'managed', gridOwner: name, deletedAt: null, isGood: false },
     })
     const refId = `gridowner:${name}`
     if (count < 2) {
@@ -220,6 +263,7 @@ export class IssuesService {
     if (!issue) throw new NotFoundException(`Issue ${id} not found`)
     const updated = await this.prisma.issue.update({ where: { id }, data: { deletedAt: null } })
     await this.refreshGridOwnerReminder(issue.gridOwner)
+    if (updated.isGood) await this.knowledge.syncGoodDoc(id) // 重建好做法文档（回收时已被移除）
     void this.knowledge.syncIssues([id])
     return updated
   }

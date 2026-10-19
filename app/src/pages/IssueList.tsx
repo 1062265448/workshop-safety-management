@@ -1,11 +1,11 @@
-import { useMemo, useRef, useState } from 'react'
-import { CheckCircle2, ChevronLeft, ChevronRight, Circle, ImagePlus, RotateCcw, Search, Trash2, X, XCircle } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { BookMarked, CheckCircle2, ChevronLeft, ChevronRight, Circle, ImagePlus, Plus, RotateCcw, Search, ThumbsUp, Trash2, X, XCircle } from 'lucide-react'
 import { api, isOverdue, uploadPhotos, useStore } from '@/lib/store'
 import { TEAMS, countGridOwners, gridOwnerTier, withSubTags } from '@/lib/config'
 import { fmtDate, fmtDateTime } from '@/lib/format'
-import { CAUSE_TYPE_LABEL, COUNTERMEASURE_LABEL, RISK_LABEL, RiskBadge, SOURCE_LABEL, STAGE_LABEL, STAGE_ORDER, STATUS_LABEL, StatusBadge } from '@/components/badges'
+import { CAUSE_TYPE_LABEL, COUNTERMEASURE_LABEL, REG_CATEGORY_META, RISK_LABEL, RiskBadge, SOURCE_LABEL, STAGE_LABEL, STAGE_ORDER, STATUS_LABEL, StatusBadge } from '@/components/badges'
 import { RELEVANCE_BADGE } from '@/pages/Annotations'
-import type { CauseType, CountermeasureLevel, IssueStatus, KnowledgeDocOption, SafetyIssue } from '@/types'
+import type { CauseType, CountermeasureLevel, IssueStatus, KnowledgeDocOption, Regulation, SafetyIssue } from '@/types'
 
 /** 状态机的下一步动作 */
 const NEXT_ACTION: Partial<Record<IssueStatus, { label: string; to: IssueStatus }>> = {
@@ -15,7 +15,7 @@ const NEXT_ACTION: Partial<Record<IssueStatus, { label: string; to: IssueStatus 
 }
 
 export default function IssueList() {
-  const { issues, tags, annotations, updateIssue, removeIssue, recheckIssue, advanceStage, fetchBin, restoreIssue, hardDeleteIssue } = useStore()
+  const { issues, tags, annotations, updateIssue, removeIssue, recheckIssue, advanceStage, fetchBin, restoreIssue, hardDeleteIssue, linkRegulation, unlinkRegulation } = useStore()
   const [q, setQ] = useState('')
   const [status, setStatus] = useState<IssueStatus | ''>('')
   const [categoryId, setCategoryId] = useState('')
@@ -52,6 +52,10 @@ export default function IssueList() {
   /** 制度沉淀完成表单：制度要点 + 关联知识库条目 */
   const [institutionDraft, setInstitutionDraft] = useState({ note: '', docId: '' })
   const [knowledgeDocs, setKnowledgeDocs] = useState<KnowledgeDocOption[]>([])
+  /** 法规依据：搜索关键词 + 候选结果（编辑模式下添加关联用） */
+  const [regQ, setRegQ] = useState('')
+  const [regResults, setRegResults] = useState<Regulation[]>([])
+  const [regSearching, setRegSearching] = useState(false)
   /** 编辑表单根因校验：系统原因选「管理」时必须说明理由 */
   const editReasonMissing = editForm.causeType === 'system' && editForm.countermeasureLevel === 'management' && !editForm.countermeasureReason.trim()
 
@@ -183,9 +187,28 @@ export default function IssueList() {
     setDetailId(issue.id)
     setIntervalDraft(String(issue.recheckIntervalDays ?? 7))
     setInstitutionDraft({ note: issue.institutionNote ?? '', docId: issue.linkedKnowledgeDocId ?? '' })
+    setRegQ('')
+    setRegResults([])
     // 制度沉淀阶段需要知识库条目下拉，首次打开详情时拉一次
     if (knowledgeDocs.length === 0) api<KnowledgeDocOption[]>('/issues/knowledge-docs').then(setKnowledgeDocs).catch(() => {})
   }
+
+  /** 法规依据搜索：停顿 300ms 后按关键词检索法规库（空关键词显示全部前 20 条） */
+  useEffect(() => {
+    if (!editing || !detailId) return
+    const timer = setTimeout(async () => {
+      setRegSearching(true)
+      try {
+        const q = regQ.trim()
+        setRegResults(await api<Regulation[]>(`/regulations${q ? `?q=${encodeURIComponent(q)}` : ''}`))
+      } catch {
+        setRegResults([])
+      } finally {
+        setRegSearching(false)
+      }
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [regQ, editing, detailId])
 
   /** 保存复查间隔（失焦时，值有变化才提交） */
   const saveInterval = () => {
@@ -298,6 +321,11 @@ export default function IssueList() {
                 {i.scope === 'reference' && (
                   <span className="px-2 py-0.5 rounded-md text-[12px] font-medium bg-neutral-500/10 text-neutral-500">参考</span>
                 )}
+                {i.isGood && (
+                  <span className="px-2 py-0.5 rounded-md text-[12px] font-medium bg-[#34C759]/12 text-[#248A3D]" title="正面典型：不计入整改闭环与超期提醒，已沉淀到知识库「好做法」">
+                    做得好
+                  </span>
+                )}
                 {/* 参考件标注徽标：已评估参考意义的直接显示等级 */}
                 {i.scope === 'reference' && (() => {
                   const ann = annotations.find((a) => a.issueId === i.id)
@@ -375,8 +403,8 @@ export default function IssueList() {
                   标记已复核
                 </button>
               )}
-              {/* 参考件不进入整改闭环，不显示状态流转按钮 */}
-              {i.scope !== 'reference' && NEXT_ACTION[i.status] && (
+              {/* 参考件/正面典型不进入整改闭环，不显示状态流转按钮 */}
+              {i.scope !== 'reference' && !i.isGood && NEXT_ACTION[i.status] && (
                 <button
                   onClick={() => transition(i)}
                   className="px-3.5 py-1.5 rounded-full bg-[#007AFF] text-white text-[12px] font-medium hover:bg-[#0066D6] transition-colors"
@@ -432,6 +460,9 @@ export default function IssueList() {
                 <div className="flex items-center gap-2 flex-wrap">
                   {detailIssue.scope === 'reference' && (
                     <span className="px-2 py-0.5 rounded-md text-[12px] font-medium bg-neutral-500/10 text-neutral-500">参考</span>
+                  )}
+                  {detailIssue.isGood && (
+                    <span className="px-2 py-0.5 rounded-md text-[12px] font-medium bg-[#34C759]/12 text-[#248A3D]">做得好</span>
                   )}
                   <RiskBadge level={detailIssue.riskLevel} />
                   {detailIssue.reviewed === false && (
@@ -636,8 +667,85 @@ export default function IssueList() {
               </div>
             )}
 
+            {/* 法规依据：只读列出关联法规；编辑模式可搜索添加 / 移除 */}
+            <div className="rounded-xl bg-neutral-50 p-4 space-y-2.5">
+              <div className="flex items-center gap-1.5 text-[13px] font-medium">
+                <BookMarked className="w-4 h-4 text-[#007AFF]" />
+                法规依据（{(detailIssue.regulations ?? []).length}）
+              </div>
+              {(detailIssue.regulations ?? []).length === 0 && !editing && (
+                <p className="text-[12px] text-neutral-400">尚未关联法规依据，点「编辑」可添加</p>
+              )}
+              {(detailIssue.regulations ?? []).length > 0 && (
+                <ul className="space-y-1.5">
+                  {(detailIssue.regulations ?? []).map((r) => {
+                    const meta = REG_CATEGORY_META[r.category] ?? { label: r.category, cls: 'bg-neutral-100 text-neutral-500' }
+                    return (
+                      <li key={r.id} className="flex items-start gap-2 rounded-lg bg-white border border-neutral-200 px-3 py-2">
+                        <span className={`shrink-0 mt-0.5 rounded-full px-2 py-0.5 text-[11px] font-medium ${meta.cls}`}>{meta.label}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[13px] text-neutral-800 leading-snug">
+                            {r.title}
+                            {r.articleNo && <span className="ml-1.5 text-[12px] text-neutral-400">{r.articleNo}</span>}
+                          </div>
+                          {r.summary && <p className="text-[12px] text-neutral-400 leading-relaxed line-clamp-2">{r.summary}</p>}
+                        </div>
+                        {editing && (
+                          <button
+                            onClick={() => unlinkRegulation(detailIssue.id, r.id)}
+                            title="移除该法规依据"
+                            className="shrink-0 p-1 text-neutral-300 hover:text-[#FF3B30] transition-colors"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+              {editing && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2 rounded-lg bg-white border border-neutral-200 px-3 py-1.5">
+                    <Search className="w-3.5 h-3.5 text-neutral-400" />
+                    <input
+                      className="flex-1 text-[13px] outline-none"
+                      placeholder="搜索法规名称 / 关键词…"
+                      value={regQ}
+                      onChange={(e) => setRegQ(e.target.value)}
+                    />
+                  </div>
+                  <div className="max-h-44 overflow-y-auto space-y-1">
+                    {regSearching && <p className="text-[12px] text-neutral-400 px-1 py-1">搜索中…</p>}
+                    {!regSearching && regResults
+                      .filter((r) => !(detailIssue.regulations ?? []).some((x) => x.id === r.id))
+                      .slice(0, 20)
+                      .map((r) => {
+                        const meta = REG_CATEGORY_META[r.category] ?? { label: r.category, cls: 'bg-neutral-100 text-neutral-500' }
+                        return (
+                          <div key={r.id} className="flex items-center gap-2 rounded-lg bg-white border border-neutral-200 px-3 py-1.5">
+                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${meta.cls}`}>{meta.label}</span>
+                            <span className="flex-1 min-w-0 truncate text-[13px] text-neutral-700">{r.title}</span>
+                            <button
+                              onClick={() => linkRegulation(detailIssue.id, r.id)}
+                              className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#007AFF]/10 text-[#007AFF] text-[12px] font-medium hover:bg-[#007AFF]/18 transition-colors"
+                            >
+                              <Plus className="w-3 h-3" />
+                              添加
+                            </button>
+                          </div>
+                        )
+                      })}
+                    {!regSearching && regResults.filter((r) => !(detailIssue.regulations ?? []).some((x) => x.id === r.id)).length === 0 && (
+                      <p className="text-[12px] text-neutral-400 px-1 py-1">没有可添加的法规条目</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* 整改闭环阶段：复查中 → 制度沉淀 → 教育职工 → 规范执行 → 闭环完成（顺序锁定，仅当前阶段可完成） */}
-            {!editing && detailIssue.scope !== 'reference' && (
+            {!editing && detailIssue.scope !== 'reference' && !detailIssue.isGood && (
               <div className="rounded-xl bg-neutral-50 p-4 space-y-3">
                 <div className="text-[13px] font-medium">整改闭环阶段</div>
                 <ol className="flex items-center gap-1.5">
@@ -741,8 +849,8 @@ export default function IssueList() {
               </div>
             )}
 
-            {/* 防复发复查：成品车间隐患至少 N 次，间隔可编辑（默认 7 天） */}
-            {!editing && detailIssue.scope !== 'reference' && (
+            {/* 防复发复查：成品车间隐患至少 N 次，间隔可编辑（默认 7 天）；正面典型不走闭环 */}
+            {!editing && detailIssue.scope !== 'reference' && !detailIssue.isGood && (
               <div className="rounded-xl bg-neutral-50 p-4 space-y-2.5">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[13px] font-medium">
@@ -841,6 +949,19 @@ export default function IssueList() {
               </div>
             ) : (
             <div className="flex items-center justify-end gap-2 pt-1">
+              {/* 好做法切换：正面典型沉淀到知识库，取消标记则移除 */}
+              <button
+                onClick={() => updateIssue(detailIssue.id, { isGood: !detailIssue.isGood })}
+                title={detailIssue.isGood ? '取消后将从知识库「好做法」移除' : '标记为正面典型，自动沉淀到知识库「好做法」'}
+                className={`mr-auto flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium transition-colors ${
+                  detailIssue.isGood
+                    ? 'bg-[#34C759] text-white hover:bg-[#2DB34E]'
+                    : 'text-[#248A3D] border border-[#34C759]/40 hover:bg-[#34C759]/8'
+                }`}
+              >
+                <ThumbsUp className="w-3.5 h-3.5" />
+                {detailIssue.isGood ? '已标为好做法 · 点击取消' : '标为好做法'}
+              </button>
               <button
                 onClick={() => startEdit(detailIssue)}
                 className="px-3 py-1.5 rounded-full text-[#007AFF] text-[12px] hover:bg-[#007AFF]/8 transition-colors"
@@ -857,7 +978,7 @@ export default function IssueList() {
               >
                 {pendingDeleteId === detailIssue.id ? '确认删除' : <><Trash2 className="w-3.5 h-3.5" />删除</>}
               </button>
-              {detailIssue.scope !== 'reference' && NEXT_ACTION[detailIssue.status] && (
+              {detailIssue.scope !== 'reference' && !detailIssue.isGood && NEXT_ACTION[detailIssue.status] && (
                 <button
                   onClick={() => transition(detailIssue)}
                   className="px-4 py-1.5 rounded-full bg-[#007AFF] text-white text-[13px] font-medium hover:bg-[#0066D6] transition-colors"

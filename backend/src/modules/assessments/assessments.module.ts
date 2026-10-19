@@ -54,7 +54,8 @@ export class AssessmentsService {
     const name = issue.gridOwner?.trim()
     if (!owner || !name) return
     const count = await this.prisma.issue.count({
-      where: { scope: 'managed', gridOwner: name, deletedAt: null },
+      // 正面典型（做得好）不算责任人的重复问题
+      where: { scope: 'managed', gridOwner: name, deletedAt: null, isGood: false },
     })
     if (count < 2) return
     const level = count >= 3 ? 'double' : 'normal'

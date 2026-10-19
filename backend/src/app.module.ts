@@ -12,6 +12,7 @@ import { AssessmentsModule } from './modules/assessments/assessments.module'
 import { UploadsModule } from './modules/uploads/uploads.module'
 import { UsersModule } from './modules/users/users.module'
 import { KnowledgeModule } from './modules/knowledge/knowledge.module'
+import { RegulationsModule } from './modules/regulations/regulations.module'
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { KnowledgeModule } from './modules/knowledge/knowledge.module'
     UploadsModule,
     UsersModule,
     KnowledgeModule,
+    RegulationsModule,
   ],
   providers: [
     // 全局守卫：AuthGuard 先认证，RolesGuard 再按角色授权（@Roles 显式声明 > 默认 viewer 只读）

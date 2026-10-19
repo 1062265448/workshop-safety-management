@@ -9,12 +9,12 @@ export function isManagedWorkshop(workshopName?: string): boolean {
 /** 成品车间责任班组 */
 export const TEAMS = ['控运班', '机组班', '加工班', '职能组'] as const
 
-/** 统计网格责任人在成品车间隐患中的出现次数（用于 ≥2 次重复提醒） */
-export function countGridOwners(issues: Array<{ scope: string; gridOwner?: string }>): Map<string, number> {
+/** 统计网格责任人在成品车间隐患中的出现次数（用于 ≥2 次重复提醒；正面典型不计入） */
+export function countGridOwners(issues: Array<{ scope: string; gridOwner?: string; isGood?: boolean }>): Map<string, number> {
   const map = new Map<string, number>()
   for (const i of issues) {
     const name = i.gridOwner?.trim()
-    if (i.scope === 'managed' && name) map.set(name, (map.get(name) ?? 0) + 1)
+    if (i.scope === 'managed' && !i.isGood && name) map.set(name, (map.get(name) ?? 0) + 1)
   }
   return map
 }
