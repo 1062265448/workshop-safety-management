@@ -1,11 +1,11 @@
 import { useMemo, useRef, useState } from 'react'
-import { CheckCircle2, ChevronLeft, ChevronRight, Circle, ImagePlus, RotateCcw, Search, Trash2, X } from 'lucide-react'
-import { isOverdue, uploadPhotos, useStore } from '@/lib/store'
+import { CheckCircle2, ChevronLeft, ChevronRight, Circle, ImagePlus, RotateCcw, Search, Trash2, X, XCircle } from 'lucide-react'
+import { api, isOverdue, uploadPhotos, useStore } from '@/lib/store'
 import { TEAMS, countGridOwners, gridOwnerTier, withSubTags } from '@/lib/config'
 import { fmtDate, fmtDateTime } from '@/lib/format'
-import { RISK_LABEL, RiskBadge, SOURCE_LABEL, STATUS_LABEL, StatusBadge } from '@/components/badges'
+import { CAUSE_TYPE_LABEL, COUNTERMEASURE_LABEL, RISK_LABEL, RiskBadge, SOURCE_LABEL, STAGE_LABEL, STAGE_ORDER, STATUS_LABEL, StatusBadge } from '@/components/badges'
 import { RELEVANCE_BADGE } from '@/pages/Annotations'
-import type { IssueStatus, SafetyIssue } from '@/types'
+import type { CauseType, CountermeasureLevel, IssueStatus, KnowledgeDocOption, SafetyIssue } from '@/types'
 
 /** 状态机的下一步动作 */
 const NEXT_ACTION: Partial<Record<IssueStatus, { label: string; to: IssueStatus }>> = {
@@ -15,7 +15,7 @@ const NEXT_ACTION: Partial<Record<IssueStatus, { label: string; to: IssueStatus 
 }
 
 export default function IssueList() {
-  const { issues, tags, annotations, updateIssue, removeIssue, recheckIssue, fetchBin, restoreIssue, hardDeleteIssue } = useStore()
+  const { issues, tags, annotations, updateIssue, removeIssue, recheckIssue, advanceStage, fetchBin, restoreIssue, hardDeleteIssue } = useStore()
   const [q, setQ] = useState('')
   const [status, setStatus] = useState<IssueStatus | ''>('')
   const [categoryId, setCategoryId] = useState('')
@@ -45,9 +45,15 @@ export default function IssueList() {
     title: '', description: '', categoryId: '', locationId: '',
     riskLevel: 'general' as SafetyIssue['riskLevel'], assignee: '', deadline: '', fixNote: '',
     team: '', gridOperator: '', gridOwner: '', systemOwner: '', systemCause: '',
+    causeType: '' as '' | CauseType, countermeasureLevel: '' as '' | CountermeasureLevel, countermeasureReason: '',
   })
   /** 复查间隔编辑草稿（天） */
   const [intervalDraft, setIntervalDraft] = useState('')
+  /** 制度沉淀完成表单：制度要点 + 关联知识库条目 */
+  const [institutionDraft, setInstitutionDraft] = useState({ note: '', docId: '' })
+  const [knowledgeDocs, setKnowledgeDocs] = useState<KnowledgeDocOption[]>([])
+  /** 编辑表单根因校验：系统原因选「管理」时必须说明理由 */
+  const editReasonMissing = editForm.causeType === 'system' && editForm.countermeasureLevel === 'management' && !editForm.countermeasureReason.trim()
 
   const categories = tags.filter((t) => t.group === 'category')
   const locations = tags.filter((t) => t.group === 'location')
@@ -139,13 +145,16 @@ export default function IssueList() {
       gridOwner: issue.gridOwner ?? '',
       systemOwner: issue.systemOwner ?? '',
       systemCause: issue.systemCause ?? '',
+      causeType: issue.causeType ?? '',
+      countermeasureLevel: issue.countermeasureLevel ?? '',
+      countermeasureReason: issue.countermeasureReason ?? '',
     })
     setEditing(true)
   }
 
   /** 保存编辑：留空的可选字段发 null 让后端清空（pick 只跳过 undefined，null 会落库为 NULL） */
   const saveEdit = () => {
-    if (!detailIssue || !editForm.title.trim()) return
+    if (!detailIssue || !editForm.title.trim() || editReasonMissing) return
     updateIssue(detailIssue.id, {
       title: editForm.title.trim(),
       description: editForm.description.trim(),
@@ -160,16 +169,22 @@ export default function IssueList() {
       gridOwner: (editForm.gridOwner.trim() || null) as SafetyIssue['gridOwner'],
       systemOwner: (editForm.systemOwner.trim() || null) as SafetyIssue['systemOwner'],
       systemCause: (editForm.systemCause.trim() || null) as SafetyIssue['systemCause'],
+      causeType: (editForm.causeType || null) as SafetyIssue['causeType'],
+      countermeasureLevel: (editForm.causeType === 'system' && editForm.countermeasureLevel ? editForm.countermeasureLevel : null) as SafetyIssue['countermeasureLevel'],
+      countermeasureReason: (editForm.countermeasureReason.trim() || null) as SafetyIssue['countermeasureReason'],
     })
     setEditing(false)
   }
 
   const closeDetail = () => { setDetailId(null); setEditing(false) }
 
-  /** 打开详情层，同时初始化复查间隔草稿 */
+  /** 打开详情层，同时初始化复查间隔草稿与制度沉淀草稿 */
   const openDetail = (issue: SafetyIssue) => {
     setDetailId(issue.id)
     setIntervalDraft(String(issue.recheckIntervalDays ?? 7))
+    setInstitutionDraft({ note: issue.institutionNote ?? '', docId: issue.linkedKnowledgeDocId ?? '' })
+    // 制度沉淀阶段需要知识库条目下拉，首次打开详情时拉一次
+    if (knowledgeDocs.length === 0) api<KnowledgeDocOption[]>('/issues/knowledge-docs').then(setKnowledgeDocs).catch(() => {})
   }
 
   /** 保存复查间隔（失焦时，值有变化才提交） */
@@ -514,6 +529,49 @@ export default function IssueList() {
                   <span className="text-neutral-400 text-[12px]">系统原因</span>
                   <textarea className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] outline-none min-h-14" value={editForm.systemCause} onChange={(e) => setEditForm({ ...editForm, systemCause: e.target.value })} placeholder="管理、制度、流程层面的根因分析…" />
                 </label>
+                {/* 戴明 94/6 根因类别：先问机制，再问人 */}
+                <label className="space-y-1">
+                  <span className="text-neutral-400 text-[12px]">根因类别</span>
+                  <select
+                    className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] outline-none"
+                    value={editForm.causeType}
+                    onChange={(e) => {
+                      const v = e.target.value as '' | CauseType
+                      setEditForm({ ...editForm, causeType: v, countermeasureLevel: v === 'system' ? editForm.countermeasureLevel : '' })
+                    }}
+                  >
+                    <option value="">未判定</option>
+                    <option value="system">{CAUSE_TYPE_LABEL.system}</option>
+                    <option value="individual">{CAUSE_TYPE_LABEL.individual}</option>
+                  </select>
+                </label>
+                {editForm.causeType === 'system' && (
+                  <label className="space-y-1">
+                    <span className="text-neutral-400 text-[12px]">对策层级（机制 → 技术 → 管理）</span>
+                    <select
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] outline-none"
+                      value={editForm.countermeasureLevel}
+                      onChange={(e) => setEditForm({ ...editForm, countermeasureLevel: e.target.value as '' | CountermeasureLevel })}
+                    >
+                      <option value="">未选择</option>
+                      {(['mechanism', 'technical', 'management'] as CountermeasureLevel[]).map((lv) => (
+                        <option key={lv} value={lv}>{COUNTERMEASURE_LABEL[lv]}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {editForm.causeType === 'system' && editForm.countermeasureLevel === 'management' && (
+                  <label className="space-y-1 col-span-2">
+                    <span className="text-neutral-400 text-[12px]">为什么机制和技术做不到？*</span>
+                    <textarea
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] outline-none min-h-14"
+                      value={editForm.countermeasureReason}
+                      onChange={(e) => setEditForm({ ...editForm, countermeasureReason: e.target.value })}
+                      placeholder="说明为何无法靠机制或技术解决，只能靠管理手段…"
+                    />
+                    {editReasonMissing && <span className="text-[11px] text-[#D70015]">选「管理」必须填写理由，否则不能保存</span>}
+                  </label>
+                )}
                 <label className="space-y-1 col-span-2">
                   <span className="text-neutral-400 text-[12px]">整改记录</span>
                   <textarea className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] outline-none min-h-16" value={editForm.fixNote} onChange={(e) => setEditForm({ ...editForm, fixNote: e.target.value })} placeholder="选填" />
@@ -548,6 +606,15 @@ export default function IssueList() {
                 </div>
               )}
               {detailIssue.systemOwner && <div><dt className="text-neutral-400 text-[12px]">系统责任人</dt><dd className="mt-0.5">{detailIssue.systemOwner}</dd></div>}
+              {detailIssue.causeType && (
+                <div>
+                  <dt className="text-neutral-400 text-[12px]">根因类别</dt>
+                  <dd className="mt-0.5">
+                    {CAUSE_TYPE_LABEL[detailIssue.causeType]}
+                    {detailIssue.causeType === 'system' && detailIssue.countermeasureLevel && ` · 对策：${COUNTERMEASURE_LABEL[detailIssue.countermeasureLevel]}`}
+                  </dd>
+                </div>
+              )}
               {detailIssue.reporter && <div><dt className="text-neutral-400 text-[12px]">排查人</dt><dd className="mt-0.5">{detailIssue.reporter}</dd></div>}
               {detailIssue.sourceFile && <div className="col-span-2 sm:col-span-3"><dt className="text-neutral-400 text-[12px]">来源文件</dt><dd className="mt-0.5 break-all">{detailIssue.sourceFile}</dd></div>}
             </dl>
@@ -558,6 +625,94 @@ export default function IssueList() {
               <div className="rounded-xl bg-[#5856D6]/6 border border-[#5856D6]/15 p-3.5">
                 <div className="text-[12px] text-[#5856D6] font-medium mb-1">系统原因</div>
                 <p className="text-[13px] text-neutral-600 leading-relaxed whitespace-pre-wrap">{detailIssue.systemCause}</p>
+              </div>
+            )}
+
+            {/* 选「管理」对策的理由（为什么机制和技术做不到） */}
+            {!editing && detailIssue.causeType === 'system' && detailIssue.countermeasureLevel === 'management' && detailIssue.countermeasureReason && (
+              <div className="rounded-xl bg-[#FF9500]/8 border border-[#FF9500]/20 p-3.5">
+                <div className="text-[12px] text-[#B25000] font-medium mb-1">选「管理」对策的理由</div>
+                <p className="text-[13px] text-neutral-600 leading-relaxed whitespace-pre-wrap">{detailIssue.countermeasureReason}</p>
+              </div>
+            )}
+
+            {/* 整改闭环阶段：复查中 → 制度沉淀 → 教育职工 → 规范执行 → 闭环完成（顺序锁定，仅当前阶段可完成） */}
+            {!editing && detailIssue.scope !== 'reference' && (
+              <div className="rounded-xl bg-neutral-50 p-4 space-y-3">
+                <div className="text-[13px] font-medium">整改闭环阶段</div>
+                <ol className="flex items-center gap-1.5">
+                  {STAGE_ORDER.map((s, idx) => {
+                    const cur = STAGE_ORDER.indexOf(detailIssue.stage ?? 'rechecking')
+                    const state = idx < cur ? 'done' : idx === cur ? 'current' : 'todo'
+                    return (
+                      <li key={s} className="flex items-center gap-1.5 flex-1 last:flex-none min-w-0">
+                        <div className={`flex items-center gap-1 shrink-0 ${state === 'current' ? 'text-[#007AFF]' : state === 'done' ? 'text-[#34C759]' : 'text-neutral-300'}`}>
+                          {state === 'done' ? <CheckCircle2 className="w-4 h-4" /> : <Circle className={`w-4 h-4 ${state === 'current' ? 'fill-[#007AFF]/20' : ''}`} />}
+                          <span className={`text-[12px] whitespace-nowrap ${state === 'current' ? 'font-semibold' : ''}`}>{STAGE_LABEL[s]}</span>
+                        </div>
+                        {idx < STAGE_ORDER.length - 1 && <div className={`h-px flex-1 min-w-2 ${idx < cur ? 'bg-[#34C759]/40' : 'bg-neutral-200'}`} />}
+                      </li>
+                    )
+                  })}
+                </ol>
+
+                {/* 制度沉淀完成表单：制度要点 + 可选知识库条目 */}
+                {detailIssue.stage === 'institutionalizing' ? (
+                  <div className="space-y-2.5">
+                    <textarea
+                      className="w-full px-3 py-2 rounded-lg bg-white border border-neutral-200 text-[13px] outline-none min-h-16 focus:ring-2 ring-[#007AFF]/30"
+                      value={institutionDraft.note}
+                      onChange={(e) => setInstitutionDraft({ ...institutionDraft, note: e.target.value })}
+                      placeholder="制度要点：把本次整改的要求写进制度/规程/点检表…"
+                    />
+                    <select
+                      className="w-full px-3 py-2 rounded-lg bg-white border border-neutral-200 text-[13px] outline-none"
+                      value={institutionDraft.docId}
+                      onChange={(e) => setInstitutionDraft({ ...institutionDraft, docId: e.target.value })}
+                    >
+                      <option value="">关联知识库条目（选填）</option>
+                      {knowledgeDocs.map((d) => <option key={d.id} value={d.id}>{d.title}</option>)}
+                    </select>
+                    <button
+                      onClick={() => advanceStage(detailIssue.id, { note: institutionDraft.note, linkedKnowledgeDocId: institutionDraft.docId || undefined })}
+                      className="px-4 py-1.5 rounded-full bg-[#007AFF] text-white text-[12px] font-medium hover:bg-[#0066D6] transition-colors"
+                    >
+                      完成本阶段（制度沉淀）
+                    </button>
+                  </div>
+                ) : detailIssue.stage === 'rechecking' ? (
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <button
+                      onClick={() => advanceStage(detailIssue.id)}
+                      disabled={(detailIssue.rechecks ?? []).length < (detailIssue.recheckRequired ?? 3)}
+                      title="复查全部合格后才能进入制度沉淀"
+                      className="px-4 py-1.5 rounded-full bg-[#007AFF] text-white text-[12px] font-medium hover:bg-[#0066D6] transition-colors disabled:opacity-40"
+                    >
+                      完成本阶段（复查中）
+                    </button>
+                    <span className="text-[12px] text-neutral-400">复查全部合格后进入「制度沉淀」；复查不合格会自动顺延一次复查</span>
+                  </div>
+                ) : detailIssue.stage === 'done' ? (
+                  <p className="text-[12px] text-[#248A3D]">整改闭环已完成</p>
+                ) : (
+                  <button
+                    onClick={() => advanceStage(detailIssue.id)}
+                    className="px-4 py-1.5 rounded-full bg-[#007AFF] text-white text-[12px] font-medium hover:bg-[#0066D6] transition-colors"
+                  >
+                    完成本阶段（{STAGE_LABEL[detailIssue.stage ?? 'rechecking']}）
+                  </button>
+                )}
+
+                {/* 制度沉淀记录展示（完成制度沉淀后各阶段可见） */}
+                {detailIssue.institutionNote && STAGE_ORDER.indexOf(detailIssue.stage ?? 'rechecking') > 1 && (
+                  <div className="rounded-lg bg-white border border-neutral-200 px-3 py-2 text-[12px] text-neutral-500 space-y-0.5">
+                    <div className="text-neutral-400">制度要点</div>
+                    <p className="whitespace-pre-wrap">{detailIssue.institutionNote}</p>
+                    {detailIssue.linkedKnowledgeDocId && (
+                      <p className="text-[#007AFF]">已关联知识库条目：{knowledgeDocs.find((d) => d.id === detailIssue.linkedKnowledgeDocId)?.title ?? detailIssue.linkedKnowledgeDocId}</p>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -622,12 +777,22 @@ export default function IssueList() {
                           {doneAt ? `已完成 ${fmtDateTime(doneAt)}` : `应查 ${fmtDate(new Date(dueMs).toISOString())}${overdueRecheck ? ' · 已到期' : ''}`}
                         </span>
                         {isNext && (
-                          <button
-                            onClick={() => recheckIssue(detailIssue.id)}
-                            className="ml-auto px-3 py-1 rounded-full bg-[#34C759] text-white text-[12px] font-medium hover:bg-[#2DB34E] transition-colors"
-                          >
-                            完成本次复查
-                          </button>
+                          <span className="ml-auto flex items-center gap-2">
+                            <button
+                              onClick={() => recheckIssue(detailIssue.id, true)}
+                              title="复发顺延：要求复查次数 +1，保持复查中阶段"
+                              className="flex items-center gap-1 px-3 py-1 rounded-full bg-[#FF3B30]/10 text-[#D70015] text-[12px] font-medium hover:bg-[#FF3B30]/20 transition-colors"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              不合格·复发
+                            </button>
+                            <button
+                              onClick={() => recheckIssue(detailIssue.id)}
+                              className="px-3 py-1 rounded-full bg-[#34C759] text-white text-[12px] font-medium hover:bg-[#2DB34E] transition-colors"
+                            >
+                              完成本次复查
+                            </button>
+                          </span>
                         )}
                       </li>
                     )
@@ -668,7 +833,7 @@ export default function IssueList() {
                 </button>
                 <button
                   onClick={saveEdit}
-                  disabled={!editForm.title.trim()}
+                  disabled={!editForm.title.trim() || editReasonMissing}
                   className="px-4 py-1.5 rounded-full bg-[#007AFF] text-white text-[13px] font-medium hover:bg-[#0066D6] transition-colors disabled:opacity-40"
                 >
                   保存修改

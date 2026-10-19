@@ -8,6 +8,7 @@ import { TagsModule } from './modules/tags/tags.module'
 import { PlansModule } from './modules/plans/plans.module'
 import { RemindersModule } from './modules/reminders/reminders.module'
 import { AnnotationsModule } from './modules/annotations/annotations.module'
+import { AssessmentsModule } from './modules/assessments/assessments.module'
 import { UploadsModule } from './modules/uploads/uploads.module'
 import { UsersModule } from './modules/users/users.module'
 import { KnowledgeModule } from './modules/knowledge/knowledge.module'
@@ -37,6 +38,7 @@ import { KnowledgeModule } from './modules/knowledge/knowledge.module'
     PlansModule,
     RemindersModule,
     AnnotationsModule,
+    AssessmentsModule,
     UploadsModule,
     UsersModule,
     KnowledgeModule,

@@ -50,6 +50,18 @@ model Issue {
   systemOwner   String?
   /// 系统原因分析
   systemCause   String?
+  /// 戴明 94/6 根因类别：system=系统原因 | individual=个人原因（null=未判定）
+  causeType     String?
+  /// 对策层级：mechanism=机制 | technical=技术 | management=管理（仅 causeType=system 时有意义）
+  countermeasureLevel  String?
+  /// 选 management 时必填：为什么机制和技术做不到
+  countermeasureReason String?
+  /// 整改闭环阶段：rechecking 复查中 → institutionalizing 制度沉淀 → educating 教育职工 → executing 规范执行 → done 闭环完成
+  stage         String    @default("rechecking")
+  /// 制度沉淀记录（制度要点）
+  institutionNote String?
+  /// 制度沉淀关联的知识库条目 id（可空）
+  linkedKnowledgeDocId String?
   /// 回收站：删除时间（null=正常；有值=已删除可恢复，查询默认排除）
   deletedAt   DateTime?
   /// 人工复核标记：手动录入默认已复核；AI 批量识别入库的为 false，人工复核后改 true
@@ -121,6 +133,25 @@ model PlanExecution {
   executedAt DateTime @default(now())
 
   @@map("plan_executions")
+}
+
+/// 考核台账：网格责任人重复达到阈值时自动写入（周期 = 当月10日 06:00 ~ 次月10日 06:00）
+model Assessment {
+  id        String   @id @default(cuid())
+  /// 触发的隐患 id（可空，无外键仅记 ID 字符串，隐患删除后记录保留）
+  issueId   String?
+  issueTitle String  @default("")
+  /// 被考核人（网格责任人或整改责任人）
+  owner     String
+  /// 考核等级：normal=提醒 | double=加倍考核（≥3 次重复）
+  level     String   @default("normal")
+  /// 考核周期起止（当月10日 06:00 ~ 次月10日 06:00）
+  periodStart DateTime
+  periodEnd   DateTime
+  note      String   @default("")
+  createdAt DateTime @default(now())
+
+  @@map("assessments")
 }
 
 /// 系统用户

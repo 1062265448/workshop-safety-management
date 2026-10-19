@@ -21,8 +21,10 @@ interface Store extends State {
   addIssue: (issue: Omit<SafetyIssue, 'id' | 'createdAt' | 'updatedAt'>) => void
   addIssues: (issues: Array<Omit<SafetyIssue, 'id' | 'createdAt' | 'updatedAt'>>) => void
   updateIssue: (id: string, patch: Partial<SafetyIssue>) => void
-  /** 记录一次防复发复查（成品车间隐患要求至少 recheckRequired 次） */
-  recheckIssue: (id: string) => void
+  /** 记录一次防复发复查（成品车间隐患要求至少 recheckRequired 次）；failed=true 表示复查不合格（复发顺延：要求次数 +1） */
+  recheckIssue: (id: string, failed?: boolean) => void
+  /** 整改闭环阶段推进：完成当前阶段（制度沉淀阶段可带制度要点与知识库条目 id） */
+  advanceStage: (id: string, body?: { note?: string; linkedKnowledgeDocId?: string }) => void
   removeIssue: (id: string) => void
   /** 回收站：拉取已删除列表 */
   fetchBin: () => Promise<SafetyIssue[]>
@@ -50,7 +52,7 @@ interface Store extends State {
 
 const StoreContext = createContext<Store | null>(null)
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
+export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const token = localStorage.getItem('wsms-token')
   const res = await fetch(`/api${path}`, {
     ...init,
@@ -159,15 +161,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const updated = await api<SafetyIssue>(`/issues/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
           setState((p) => ({ ...p, issues: p.issues.map((i) => (i.id === id ? updated : i)) }))
         }),
-      recheckIssue: (id) =>
+      recheckIssue: (id, failed) =>
         run(async () => {
-          const updated = await api<SafetyIssue>(`/issues/${id}/recheck`, { method: 'POST' })
+          const updated = await api<SafetyIssue>(`/issues/${id}/recheck`, { method: 'POST', body: JSON.stringify({ failed: failed === true }) })
           setState((p) => ({
             ...p,
             issues: p.issues.map((i) => (i.id === id ? updated : i)),
             // 后端已清掉该隐患的复查提醒，本地同步移除
             reminders: p.reminders.filter((r) => !(r.type === 'recheck' && r.refId.startsWith(`${id}#`))),
           }))
+        }),
+      advanceStage: (id, body) =>
+        run(async () => {
+          const updated = await api<SafetyIssue>(`/issues/${id}/stage/next`, { method: 'POST', body: JSON.stringify(body ?? {}) })
+          setState((p) => ({ ...p, issues: p.issues.map((i) => (i.id === id ? updated : i)) }))
         }),
       removeIssue: (id) =>
         run(async () => {

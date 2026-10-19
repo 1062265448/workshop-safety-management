@@ -16,6 +16,11 @@ export class IssuesController {
     return this.svc.findAll({ status, categoryId, locationId, q, bin: bin === '1' })
   }
 
+  @Get('knowledge-docs')
+  knowledgeDocs() {
+    return this.svc.knowledgeDocs()
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.svc.findOne(id)
@@ -32,8 +37,14 @@ export class IssuesController {
   }
 
   @Post(':id/recheck')
-  recheck(@Param('id') id: string) {
-    return this.svc.recheck(id)
+  recheck(@Param('id') id: string, @Body() body?: { failed?: boolean }) {
+    return this.svc.recheck(id, body?.failed === true)
+  }
+
+  /** 整改闭环阶段推进：完成当前阶段（制度沉淀阶段可带制度要点与知识库条目） */
+  @Post(':id/stage/next')
+  advanceStage(@Param('id') id: string, @Body() body?: { note?: string; linkedKnowledgeDocId?: string }) {
+    return this.svc.advanceStage(id, body ?? {})
   }
 
   /** 回收站恢复 */

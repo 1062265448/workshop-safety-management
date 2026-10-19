@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common'
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../../prisma.service'
 import { KnowledgeService } from '../knowledge/knowledge.module'
+import { AssessmentsService } from '../assessments/assessments.module'
 
 /** 允许客户端写入的字段白名单 */
 const WRITABLE = [
@@ -10,8 +11,13 @@ const WRITABLE = [
   'foundAt', 'deadline', 'closedAt', 'fixNote', 'photos',
   'recheckIntervalDays', 'rechecks',
   'team', 'gridOperator', 'gridOwner', 'systemOwner', 'systemCause',
+  'causeType', 'countermeasureLevel', 'countermeasureReason',
+  'institutionNote', 'linkedKnowledgeDocId',
   'reviewed',
 ] as const
+
+/** 整改闭环阶段顺序（stage 只允许通过 stage/next 接口按序推进） */
+const STAGE_ORDER = ['rechecking', 'institutionalizing', 'educating', 'executing', 'done'] as const
 
 function pick(body: Record<string, unknown>): Prisma.IssueUncheckedCreateInput {
   const data: Record<string, unknown> = {}
@@ -29,7 +35,34 @@ export class IssuesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly knowledge: KnowledgeService,
+    private readonly assessments: AssessmentsService,
   ) {}
+
+  /**
+   * 戴明 94/6 根因校验（对策按 机制 → 技术 → 管理 的顺序想）：
+   * - 对策层级仅 causeType=system 时有意义；
+   * - 选 management 必须说明"为什么机制和技术做不到"（countermeasureReason）。
+   * 更新时与库中现值合并校验（body 传 null 可清空）。
+   */
+  private checkCountermeasure(
+    body: Record<string, unknown>,
+    before?: { causeType: string | null; countermeasureLevel: string | null; countermeasureReason: string | null } | null,
+  ) {
+    const merged = {
+      causeType: before?.causeType ?? null,
+      countermeasureLevel: before?.countermeasureLevel ?? null,
+      countermeasureReason: before?.countermeasureReason ?? null,
+    }
+    for (const key of ['causeType', 'countermeasureLevel', 'countermeasureReason'] as const) {
+      if (body[key] !== undefined) merged[key] = body[key] as string | null
+    }
+    if (merged.countermeasureLevel && merged.causeType !== 'system') {
+      throw new BadRequestException('对策层级仅在根因类别为「系统原因」时可填')
+    }
+    if (merged.countermeasureLevel === 'management' && !merged.countermeasureReason?.trim()) {
+      throw new BadRequestException('对策层级选「管理」时，必须说明为什么机制和技术做不到（countermeasureReason）')
+    }
+  }
 
   findAll(filters: { status?: string; categoryId?: string; locationId?: string; q?: string; bin?: boolean }) {
     const where: Prisma.IssueWhereInput = {}
@@ -54,16 +87,20 @@ export class IssuesService {
   }
 
   create(body: Record<string, unknown>) {
+    this.checkCountermeasure(body)
     return this.prisma.issue.create({ data: pick(body) }).then(async (issue) => {
       await this.refreshGridOwnerReminder(issue.gridOwner)
+      await this.assessments.recordRepeat(issue)
       void this.knowledge.syncIssues([issue.id]) // 增量索引：新问题实时进知识库
       return issue
     })
   }
 
   createBatch(items: Record<string, unknown>[]) {
+    for (const item of items) this.checkCountermeasure(item)
     return this.prisma.$transaction(items.map((item) => this.prisma.issue.create({ data: pick(item) }))).then(async (created) => {
       for (const name of new Set(created.map((i) => i.gridOwner))) await this.refreshGridOwnerReminder(name)
+      for (const issue of created) await this.assessments.recordRepeat(issue)
       void this.knowledge.syncIssues(created.map((i) => i.id)) // 批量导入一次嵌入，比逐条快一个数量级
       return created
     })
@@ -71,10 +108,21 @@ export class IssuesService {
 
   async update(id: string, body: Record<string, unknown>) {
     const before = await this.prisma.issue.findUnique({ where: { id } })
+    this.checkCountermeasure(body, before)
     const issue = await this.prisma.issue.update({ where: { id }, data: pick(body) })
     for (const name of new Set([before?.gridOwner, issue.gridOwner])) await this.refreshGridOwnerReminder(name)
+    await this.assessments.recordRepeat(issue)
     void this.knowledge.syncIssues([id]) // 内容/状态/分类变更同步进知识库
     return issue
+  }
+
+  /** 知识库条目下拉选项（制度沉淀阶段关联用；只读查询，不动知识库模块） */
+  knowledgeDocs() {
+    return this.prisma.knowledgeDoc.findMany({
+      select: { id: true, title: true, kind: true },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    })
   }
 
   /**
@@ -107,16 +155,52 @@ export class IssuesService {
     }
   }
 
-  /** 记录一次防复发复查：追加完成时间，并清掉该隐患的复查提醒 */
-  async recheck(id: string) {
+  /** 记录一次防复发复查：追加完成时间，并清掉该隐患的复查提醒；全部合格后进入「制度沉淀」阶段 */
+  async recheck(id: string, failed = false) {
     const issue = await this.findOne(id)
+    // 复发顺延：复查不合格 → 要求复查次数 +1，保持复查中阶段（整改没站住就继续盯）
+    if (failed) {
+      const updated = await this.prisma.issue.update({
+        where: { id },
+        data: { recheckRequired: issue.recheckRequired + 1, stage: 'rechecking' },
+      })
+      void this.knowledge.syncIssues([id])
+      return updated
+    }
     if (issue.rechecks.length >= issue.recheckRequired) return issue
+    const rechecks = [...issue.rechecks, new Date().toISOString()]
+    const allPassed = rechecks.length >= issue.recheckRequired
     const updated = await this.prisma.issue.update({
       where: { id },
-      data: { rechecks: [...issue.rechecks, new Date().toISOString()] },
+      data: {
+        rechecks,
+        // 三次复查全部合格 → 自动进入「制度沉淀」阶段
+        ...(allPassed && issue.stage === 'rechecking' ? { stage: 'institutionalizing' } : {}),
+      },
     })
     await this.prisma.reminder.deleteMany({ where: { type: 'recheck', refId: { startsWith: `${id}#` } } })
     void this.knowledge.syncIssues([id]) // 复查次数写进知识库文档
+    return updated
+  }
+
+  /**
+   * 整改闭环阶段推进：rechecking → institutionalizing → educating → executing → done
+   * 阶段按顺序锁定，前一步没完成后一步不能做；制度沉淀阶段可记录制度要点并关联知识库条目。
+   */
+  async advanceStage(id: string, body: { note?: string; linkedKnowledgeDocId?: string }) {
+    const issue = await this.findOne(id)
+    const idx = STAGE_ORDER.indexOf(issue.stage as (typeof STAGE_ORDER)[number])
+    if (idx < 0 || idx >= STAGE_ORDER.length - 1) throw new BadRequestException('该隐患已完成闭环，无需再推进阶段')
+    if (issue.stage === 'rechecking' && issue.rechecks.length < issue.recheckRequired) {
+      throw new BadRequestException('复查尚未全部合格，不能进入下一阶段')
+    }
+    const data: Prisma.IssueUncheckedUpdateInput = { stage: STAGE_ORDER[idx + 1] }
+    if (issue.stage === 'institutionalizing') {
+      data.institutionNote = body.note?.trim() || null
+      data.linkedKnowledgeDocId = body.linkedKnowledgeDocId || null
+    }
+    const updated = await this.prisma.issue.update({ where: { id }, data })
+    void this.knowledge.syncIssues([id])
     return updated
   }
 

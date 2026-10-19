@@ -14,6 +14,15 @@ export type IssueSource = 'manual' | 'pptx' | 'docx' | 'xlsx'
 /** 管理范围：managed=成品车间（完整闭环），reference=其他车间（仅参考） */
 export type IssueScope = 'managed' | 'reference'
 
+/** 戴明 94/6 根因类别：system=系统原因 | individual=个人原因 */
+export type CauseType = 'system' | 'individual'
+
+/** 对策层级（仅系统原因时有意义）：机制 → 技术 → 管理 */
+export type CountermeasureLevel = 'mechanism' | 'technical' | 'management'
+
+/** 整改闭环阶段：复查中 → 制度沉淀 → 教育职工 → 规范执行 → 闭环完成 */
+export type IssueStage = 'rechecking' | 'institutionalizing' | 'educating' | 'executing' | 'done'
+
 /** 隐患问题（系统核心实体） */
 export interface SafetyIssue {
   id: string
@@ -62,6 +71,18 @@ export interface SafetyIssue {
   systemOwner?: string
   /** 系统原因分析 */
   systemCause?: string
+  /** 戴明 94/6 根因类别（null/undefined=未判定） */
+  causeType?: CauseType | null
+  /** 对策层级（仅 causeType=system 时有意义） */
+  countermeasureLevel?: CountermeasureLevel | null
+  /** 选 management 时必填：为什么机制和技术做不到 */
+  countermeasureReason?: string | null
+  /** 整改闭环阶段（默认 rechecking，三次复查全合格后进入制度沉淀） */
+  stage: IssueStage
+  /** 制度沉淀记录（制度要点） */
+  institutionNote?: string | null
+  /** 制度沉淀关联的知识库条目 id */
+  linkedKnowledgeDocId?: string | null
   /** 回收站：删除时间 ISO（有值表示已删除，可恢复） */
   deletedAt?: string | null
   /** 人工复核标记：手动录入为 true；AI 批量识别入库为 false，复核后改 true */
@@ -132,6 +153,30 @@ export interface IssueAnnotation {
   tagId?: string | null
   createdAt: string
   updatedAt: string
+}
+
+/** 考核台账记录：网格责任人重复达到阈值时自动写入 */
+export interface Assessment {
+  id: string
+  /** 触发的隐患 id（无外键，隐患删除后记录保留） */
+  issueId?: string | null
+  issueTitle: string
+  /** 被考核人（网格责任人或整改责任人） */
+  owner: string
+  /** normal=提醒 | double=加倍考核 */
+  level: 'normal' | 'double'
+  /** 考核周期起止 ISO（当月10日 06:00 ~ 次月10日 06:00） */
+  periodStart: string
+  periodEnd: string
+  note: string
+  createdAt: string
+}
+
+/** 知识库条目下拉选项（制度沉淀关联用） */
+export interface KnowledgeDocOption {
+  id: string
+  title: string
+  kind: string
 }
 
 /** 提醒类型 */

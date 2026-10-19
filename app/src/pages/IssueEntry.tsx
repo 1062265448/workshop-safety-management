@@ -5,8 +5,8 @@ import { uploadPhotos, useStore } from '@/lib/store'
 import { isManagedWorkshop, TEAMS, countGridOwners, withSubTags } from '@/lib/config'
 import { detectSource, parseFileOffthread, type SkippedPage } from '@/lib/import/parsers'
 import { matchReview } from '@/lib/import/matchReview'
-import { RISK_LABEL, RiskBadge, StatusBadge } from '@/components/badges'
-import type { IssueDraft, IssueSource, ReviewDraft, RiskLevel } from '@/types'
+import { RISK_LABEL, RiskBadge, StatusBadge, CAUSE_TYPE_LABEL, COUNTERMEASURE_LABEL } from '@/components/badges'
+import type { CauseType, CountermeasureLevel, IssueDraft, IssueSource, ReviewDraft, RiskLevel } from '@/types'
 
 // ── 录入联动：与知识库语义比对，提示相似既有隐患 ──
 interface SimilarCase { issueId: string; title: string; score: number; snippet: string }
@@ -35,7 +35,10 @@ export default function IssueEntry() {
     title: '', description: '', locationId: '', categoryId: '',
     riskLevel: 'general' as RiskLevel, assignee: '', deadline: '',
     team: '', gridOperator: '', gridOwner: '', systemOwner: '', systemCause: '',
+    causeType: '' as '' | CauseType, countermeasureLevel: '' as '' | CountermeasureLevel, countermeasureReason: '',
   })
+  /** 根因校验：系统原因选「管理」对策时必须说明为什么机制和技术做不到 */
+  const reasonMissing = form.causeType === 'system' && form.countermeasureLevel === 'management' && !form.countermeasureReason.trim()
   /** 待上传的现场照片（本地 File，提交时统一上传） */
   const [photoFiles, setPhotoFiles] = useState<File[]>([])
   const [submitting, setSubmitting] = useState(false)
@@ -78,7 +81,7 @@ export default function IssueEntry() {
   }, [form.title, form.description, tab])
 
   const submitManual = async () => {
-    if (!form.title.trim() || submitting) return
+    if (!form.title.trim() || reasonMissing || submitting) return
     setSubmitting(true)
     try {
       const photos = await uploadPhotos(photoFiles)
@@ -101,12 +104,16 @@ export default function IssueEntry() {
         gridOwner: form.gridOwner.trim() || undefined,
         systemOwner: form.systemOwner.trim() || undefined,
         systemCause: form.systemCause.trim() || undefined,
+        causeType: form.causeType || undefined,
+        countermeasureLevel: form.causeType === 'system' && form.countermeasureLevel ? form.countermeasureLevel : undefined,
+        countermeasureReason: form.countermeasureReason.trim() || undefined,
         foundAt: new Date().toISOString(),
         deadline: form.deadline ? new Date(form.deadline).toISOString() : undefined,
         photos,
         recheckIntervalDays: 7,
         recheckRequired: 3,
         rechecks: [],
+        stage: 'rechecking',
         // 手动录入即人工复核
         reviewed: true,
       })
@@ -244,6 +251,7 @@ export default function IssueEntry() {
               recheckIntervalDays: 7,
               recheckRequired: 3,
               rechecks: [],
+              stage: 'rechecking' as const,
               // AI 批量识别入库：标记为人工未复核，复核后改 true
               reviewed: false,
               // 参考件不设整改期限，不进入闭环与提醒
@@ -484,6 +492,60 @@ export default function IssueEntry() {
             </div>
           </section>
 
+          {/* 根因分析（戴明 94/6）：先问机制，再问人 */}
+          <section className="bg-white rounded-2xl p-6 shadow-sm space-y-5">
+            <div className="flex items-baseline justify-between">
+              <h2 className="text-[13px] font-semibold text-neutral-400 tracking-wide">根因类别（选填）</h2>
+              <span className="text-[11px] text-neutral-400">先问机制，再问人</span>
+            </div>
+            <div>
+              <div className="flex gap-1 bg-neutral-200/60 p-1 rounded-xl w-fit">
+                {([['', '未判定'], ['system', CAUSE_TYPE_LABEL.system], ['individual', CAUSE_TYPE_LABEL.individual]] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => setForm({ ...form, causeType: key, countermeasureLevel: key === 'system' ? form.countermeasureLevel : '' })}
+                    className={`px-4 py-1.5 rounded-lg text-[14px] transition-all ${form.causeType === key ? 'bg-white shadow-sm font-medium text-[#007AFF]' : 'text-neutral-500'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {form.causeType === 'individual' && (
+                <p className="text-[12px] text-neutral-400 mt-2">个人原因落到具体纠正和教育；约 94% 的问题出在系统，判定前请再想一层机制。</p>
+              )}
+            </div>
+            {form.causeType === 'system' && (
+              <div className="space-y-3">
+                <div>
+                  <label className="text-[13px] text-neutral-500 block mb-1.5">对策层级（按 机制 → 技术 → 管理 的顺序想）</label>
+                  <div className="flex gap-1 bg-neutral-200/60 p-1 rounded-xl w-fit">
+                    {(['mechanism', 'technical', 'management'] as CountermeasureLevel[]).map((lv) => (
+                      <button
+                        key={lv}
+                        onClick={() => setForm({ ...form, countermeasureLevel: lv })}
+                        className={`px-5 py-1.5 rounded-lg text-[14px] transition-all ${form.countermeasureLevel === lv ? 'bg-white shadow-sm font-medium text-[#007AFF]' : 'text-neutral-500'}`}
+                      >
+                        {COUNTERMEASURE_LABEL[lv]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {form.countermeasureLevel === 'management' && (
+                  <div>
+                    <label className="text-[13px] text-neutral-500 block mb-1.5">为什么机制和技术做不到？*</label>
+                    <textarea
+                      className={`${inputCls} min-h-20`}
+                      value={form.countermeasureReason}
+                      onChange={(e) => setForm({ ...form, countermeasureReason: e.target.value })}
+                      placeholder="说明为何无法靠制度/流程/检查机制或技术装置解决，只能靠培训、教育、考核…"
+                    />
+                    {reasonMissing && <p className="text-[12px] text-[#D70015] mt-1.5">选「管理」必须填写理由，否则不能登记</p>}
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+
           {/* 现场照片 */}
           <section className="bg-white rounded-2xl p-6 shadow-sm space-y-4">
             <h2 className="text-[13px] font-semibold text-neutral-400 tracking-wide">现场照片</h2>
@@ -524,7 +586,7 @@ export default function IssueEntry() {
           <div className="flex justify-end pb-2">
             <button
               onClick={submitManual}
-              disabled={!form.title.trim() || submitting}
+              disabled={!form.title.trim() || reasonMissing || submitting}
               className="px-8 py-2.5 rounded-full bg-[#007AFF] text-white text-[15px] font-medium disabled:opacity-40 hover:bg-[#0066D6] transition-colors flex items-center gap-2"
             >
               {submitting && <Loader2 className="w-4 h-4 animate-spin" />}

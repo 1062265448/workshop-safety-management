@@ -1,22 +1,69 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Scale, Trash2 } from 'lucide-react'
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
-import { useStore } from '@/lib/store'
+import { api, useStore } from '@/lib/store'
 import { fmtDate } from '@/lib/format'
 import { RISK_COLOR, RISK_LABEL } from '@/components/badges'
-import type { RiskLevel } from '@/types'
+import type { Assessment, RiskLevel } from '@/types'
 
 type Period = 'week' | 'month' | 'quarter'
 const PERIOD_DAYS: Record<Period, number> = { week: 7, month: 30, quarter: 90 }
 const PERIOD_LABEL: Record<Period, string> = { week: '近 7 天', month: '近 30 天', quarter: '近 90 天' }
+
+/** 考核周期：当月10日 06:00 ~ 次月10日 06:00（日期 >= 10 算本月起，否则上月10日起）；offset 前后翻周期 */
+function assessmentMonth(offset = 0): string {
+  const now = new Date()
+  const base = now.getDate() >= 10 ? new Date(now.getFullYear(), now.getMonth(), 1) : new Date(now.getFullYear(), now.getMonth() - 1, 1)
+  const d = new Date(base.getFullYear(), base.getMonth() + offset, 1)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+/** 考核周期起止展示（MM-DD ~ MM-DD） */
+function assessmentPeriodLabel(month: string): string {
+  const [y, m] = month.split('-').map(Number)
+  const end = new Date(y, m, 10)
+  return `${m}/10 ~ ${end.getMonth() + 1}/10`
+}
 
 export default function Statistics() {
   const { issues: allIssues, tags } = useStore()
   const [period, setPeriod] = useState<Period>('month')
   /** 统计范围：成品车间（闭环管理）/ 其他车间（厂督察重点参考）/ 全部 */
   const [scope, setScope] = useState<'' | 'managed' | 'reference'>('managed')
+
+  // ── 本月考核：周期 = 当月10日 ~ 次月10日，可前后翻周期 ──
+  const [asmOffset, setAsmOffset] = useState(0)
+  const [asmOpen, setAsmOpen] = useState(false)
+  const [assessments, setAssessments] = useState<Assessment[]>([])
+  const [pendingAsmDeleteId, setPendingAsmDeleteId] = useState<string | null>(null)
+  const asmMonth = assessmentMonth(asmOffset)
+  useEffect(() => {
+    api<Assessment[]>(`/assessments?month=${asmMonth}`).then(setAssessments).catch(() => setAssessments([]))
+  }, [asmMonth])
+
+  const deleteAssessment = (id: string) => {
+    if (pendingAsmDeleteId !== id) {
+      setPendingAsmDeleteId(id)
+      setTimeout(() => setPendingAsmDeleteId((cur) => (cur === id ? null : cur)), 3000)
+      return
+    }
+    api<Assessment>(`/assessments/${id}`, { method: 'DELETE' })
+      .then(() => setAssessments((cur) => cur.filter((a) => a.id !== id)))
+      .catch(() => {})
+    setPendingAsmDeleteId(null)
+  }
+
+  // ── 戴明 94/6 根因构成：只统计成品车间已判定根因的隐患 ──
+  const causeStats = useMemo(() => {
+    const judged = allIssues.filter((i) => i.scope === 'managed' && i.causeType)
+    const system = judged.filter((i) => i.causeType === 'system').length
+    const individual = judged.filter((i) => i.causeType === 'individual').length
+    const total = system + individual
+    return { system, individual, total, systemPct: total ? Math.round((system / total) * 100) : 0 }
+  }, [allIssues])
 
   const data = useMemo(() => {
     // 统计范围：默认仅成品车间（managed）；可选其他车间参考件，用于观察厂督察检查重点
@@ -99,6 +146,102 @@ export default function Statistics() {
           ))}
         </div>
       </header>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* 根因构成（戴明 94/6）：先问机制，再问人 */}
+        <section className={card}>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-[15px] font-semibold">根因构成</h2>
+            <span className="text-[11px] text-neutral-400">成品车间 · 已判定 {causeStats.total} 条</span>
+          </div>
+          {causeStats.total === 0 ? (
+            <p className="text-[13px] text-neutral-400 py-6 text-center">暂无已判定根因的隐患，录入或编辑时选择「根因类别」后计入</p>
+          ) : (
+            <div className="space-y-3">
+              <div className="h-3 rounded-full bg-neutral-100 overflow-hidden flex">
+                <div className="h-full bg-[#007AFF]" style={{ width: `${causeStats.systemPct}%` }} />
+                <div className="h-full bg-[#FF9500]" style={{ width: `${100 - causeStats.systemPct}%` }} />
+              </div>
+              <div className="flex justify-between text-[13px]">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#007AFF]" />
+                  系统原因 <span className="tabular-nums text-neutral-400">{causeStats.system} 条 · {causeStats.systemPct}%</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#FF9500]" />
+                  个人原因 <span className="tabular-nums text-neutral-400">{causeStats.individual} 条 · {100 - causeStats.systemPct}%</span>
+                </span>
+              </div>
+              <p className="text-[12px] text-neutral-400 leading-relaxed">
+                戴明 94/6：约 94% 的问题出在系统。先问「什么机制让他容易犯错」，再问「谁错了」。
+              </p>
+            </div>
+          )}
+        </section>
+
+        {/* 本月考核：网格责任人重复 2 次提醒 / ≥3 次加倍考核，周期为当月10日 ~ 次月10日 */}
+        <section className={card}>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-[15px] font-semibold flex items-center gap-2">
+              <span className="w-7 h-7 rounded-lg bg-[#AF52DE]/12 flex items-center justify-center">
+                <Scale className="w-4 h-4 text-[#8944AB]" />
+              </span>
+              本月考核
+            </h2>
+            <div className="flex items-center gap-1 text-[12px] text-neutral-400">
+              <button onClick={() => setAsmOffset((v) => v - 1)} className="p-1 rounded-md hover:bg-neutral-100 hover:text-neutral-600 transition-colors" title="上一周期">
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <span className="tabular-nums">{assessmentPeriodLabel(asmMonth)}</span>
+              <button
+                onClick={() => setAsmOffset((v) => v + 1)}
+                disabled={asmOffset >= 0}
+                className="p-1 rounded-md hover:bg-neutral-100 hover:text-neutral-600 transition-colors disabled:opacity-30"
+                title="下一周期"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+          <button onClick={() => setAsmOpen((v) => !v)} className="w-full flex items-center justify-between group">
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl font-semibold tabular-nums text-[#8944AB]">{assessments.length}</span>
+              <span className="text-[13px] text-neutral-500">条考核记录{assessments.some((a) => a.level === 'double') && `（含加倍考核 ${assessments.filter((a) => a.level === 'double').length} 条）`}</span>
+            </div>
+            {asmOpen ? <ChevronUp className="w-4 h-4 text-neutral-300 group-hover:text-neutral-500" /> : <ChevronDown className="w-4 h-4 text-neutral-300 group-hover:text-neutral-500" />}
+          </button>
+          {asmOpen && (
+            assessments.length === 0 ? (
+              <p className="text-[13px] text-neutral-400 py-4 text-center">本周期暂无考核记录</p>
+            ) : (
+              <ul className="mt-3 divide-y divide-neutral-100">
+                {assessments.map((a) => (
+                  <li key={a.id} className="py-2.5 flex items-center gap-3">
+                    <span className={`shrink-0 px-2 py-0.5 rounded-md text-[12px] font-medium ${a.level === 'double' ? 'bg-[#AF52DE] text-white' : 'bg-[#AF52DE]/12 text-[#8944AB]'}`}>
+                      {a.level === 'double' ? '加倍考核' : '提醒'}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[13px] truncate">{a.owner} · {a.issueTitle || '（隐患已删除）'}</div>
+                      <div className="text-[12px] text-neutral-400 truncate">{a.note}</div>
+                    </div>
+                    <button
+                      onClick={() => deleteAssessment(a.id)}
+                      className={
+                        pendingAsmDeleteId === a.id
+                          ? 'shrink-0 px-2.5 py-1 rounded-full bg-[#FF3B30] text-white text-[11px] font-medium'
+                          : 'shrink-0 p-1.5 text-neutral-300 hover:text-[#FF3B30] transition-colors'
+                      }
+                      title="删除误记"
+                    >
+                      {pendingAsmDeleteId === a.id ? '确认删除' : <Trash2 className="w-4 h-4" />}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )
+          )}
+        </section>
+      </div>
 
       {/* 新增趋势 */}
       <section className={card}>
