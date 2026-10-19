@@ -1,5 +1,35 @@
+import type { PlanFrequency } from '@/types'
+
 /** 本系统的管理对象：成品车间。其他车间的通报问题仅作参考存档 */
 export const MANAGED_WORKSHOP = '成品车间'
+
+/**
+ * 检查计划「频次模板」：预置厂"一线工作法"规定的各级检查频次。
+ * 仅前端快捷填充用，不落库；选择后自动填计划名称与周期，用户可再改。
+ * 现有周期字段只有 daily/weekly/monthly/quarterly 四档，"每周3次""每班2次"
+ * 等细粒度频次以文字形式并入计划名称（如"车间主任巡查（每周3次）"），
+ * 周期映射到最接近的一档。
+ */
+export interface PlanFrequencyTemplate {
+  key: string
+  /** chip 上显示的名称 */
+  label: string
+  /** 填充进"计划名称"的频次说明（并入名称，保留细粒度信息） */
+  timesText: string
+  /** 映射到现有周期字段的档位 */
+  frequency: PlanFrequency
+  /** 是否空白自定义 */
+  custom?: boolean
+}
+
+export const PLAN_FREQUENCY_TEMPLATES: PlanFrequencyTemplate[] = [
+  { key: 'director', label: '车间主任巡查', timesText: '每周3次', frequency: 'weekly' },
+  { key: 'engineer', label: '管理/工程人员巡查', timesText: '每工作日1次', frequency: 'daily' },
+  { key: 'teamlead', label: '班组长班中检查', timesText: '每班1次', frequency: 'daily' },
+  { key: 'worker', label: '岗位工人自查', timesText: '每班2次', frequency: 'daily' },
+  { key: 'dept', label: '厂专业部室检查', timesText: '每月1次', frequency: 'monthly' },
+  { key: 'custom', label: '自定义', timesText: '', frequency: 'weekly', custom: true },
+]
 
 /** 判定车间名是否属于本系统管理范围 */
 export function isManagedWorkshop(workshopName?: string): boolean {

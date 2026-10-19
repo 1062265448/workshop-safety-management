@@ -33,3 +33,6 @@ pdf-qa/
 Thumbs.db
 *.log
 wsms-backup-*.dump
+
+# 每日自动备份产物（scripts/backup.ps1 生成，含 uploads 镜像与日志，不入库）
+backups/

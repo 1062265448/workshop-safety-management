@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { Bell, CalendarClock, Plus, Trash2 } from 'lucide-react'
+import { Bell, CalendarClock, LayoutTemplate, Plus, Trash2 } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { fmtDateTime } from '@/lib/format'
+import { PLAN_FREQUENCY_TEMPLATES } from '@/lib/config'
 import type { PlanFrequency } from '@/types'
 
 const FREQ_LABEL: Record<PlanFrequency, string> = { daily: '每日', weekly: '每周', monthly: '每月', quarterly: '每季度' }
@@ -14,6 +15,23 @@ export default function Plans() {
   const [execForm, setExecForm] = useState({ executor: '', note: '', issueIds: [] as string[] })
   /** 待二次确认删除的计划 id（内联确认，不用原生 confirm） */
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
+
+  /** 当前选中的频次模板 key（仅用于 chip 高亮，不影响提交） */
+  const [templateKey, setTemplateKey] = useState<string | null>(null)
+
+  const blankForm = { name: '', scope: '', frequency: 'weekly' as PlanFrequency, nextRunAt: '', remindBeforeMinutes: 60 }
+
+  /** 套用"一线工作法"频次模板：填充计划名称与周期，用户可再改；自定义则清空 */
+  const applyTemplate = (key: string) => {
+    const t = PLAN_FREQUENCY_TEMPLATES.find((x) => x.key === key)
+    if (!t) return
+    setTemplateKey(key)
+    if (t.custom) {
+      setForm({ ...blankForm, nextRunAt: form.nextRunAt })
+    } else {
+      setForm({ ...form, name: `${t.label}（${t.timesText}）`, frequency: t.frequency })
+    }
+  }
 
   const confirmRemovePlan = (id: string) => {
     if (pendingDeleteId === id) {
@@ -48,7 +66,8 @@ export default function Plans() {
       remindBeforeMinutes: form.remindBeforeMinutes,
       enabled: true,
     })
-    setForm({ name: '', scope: '', frequency: 'weekly', nextRunAt: '', remindBeforeMinutes: 60 })
+    setForm(blankForm)
+    setTemplateKey(null)
   }
 
   const inputCls = 'px-3 py-2 rounded-lg bg-neutral-100/80 text-[13px] outline-none focus:ring-2 ring-[#007AFF]/30'
@@ -63,6 +82,26 @@ export default function Plans() {
       {/* 新建计划 */}
       <section className="bg-white rounded-2xl p-5 shadow-sm">
         <h2 className="text-[15px] font-semibold mb-3">新建检查计划</h2>
+        {/* 频次模板：厂"一线工作法"规定的各级检查频次，点选自动填充 */}
+        <div className="flex items-center gap-2 flex-wrap mb-3">
+          <span className="flex items-center gap-1 text-[12px] text-neutral-400 shrink-0">
+            <LayoutTemplate className="w-3.5 h-3.5" /> 频次模板
+          </span>
+          {PLAN_FREQUENCY_TEMPLATES.map((t) => {
+            const on = templateKey === t.key
+            return (
+              <button
+                key={t.key}
+                onClick={() => applyTemplate(t.key)}
+                className={`px-3 py-1 rounded-full text-[12px] transition-colors ${
+                  on ? 'bg-[#007AFF] text-white' : 'bg-white border border-neutral-200 text-neutral-600 hover:border-[#007AFF]/50 hover:text-[#007AFF]'
+                }`}
+              >
+                {t.label}{t.timesText ? <span className={on ? 'text-white/80' : 'text-neutral-400'}> · {t.timesText}</span> : ''}
+              </button>
+            )
+          })}
+        </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           <input className={inputCls} placeholder="计划名称 *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           <input className={inputCls} placeholder="检查范围（如：一号车间·消防）" value={form.scope} onChange={(e) => setForm({ ...form, scope: e.target.value })} />
