@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Bell, CalendarClock, LayoutTemplate, Plus, Trash2 } from 'lucide-react'
+import { Bell, CalendarClock, LayoutTemplate, Plus, Trash2, X } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { fmtDateTime } from '@/lib/format'
 import { PLAN_FREQUENCY_TEMPLATES } from '@/lib/config'
@@ -13,6 +13,13 @@ export default function Plans() {
   /** 正在填写执行记录的计划 id */
   const [completingId, setCompletingId] = useState<string | null>(null)
   const [execForm, setExecForm] = useState({ executor: '', note: '', issueIds: [] as string[] })
+  /** 关联隐患的关键字搜索词（随表单打开/关闭重置） */
+  const [linkQuery, setLinkQuery] = useState('')
+
+  const toggleCompleting = (id: string) => {
+    setCompletingId((cur) => (cur === id ? null : id))
+    setLinkQuery('')
+  }
   /** 待二次确认删除的计划 id（内联确认，不用原生 confirm） */
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
 
@@ -45,6 +52,15 @@ export default function Plans() {
 
   const openIssues = issues.filter((i) => i.status !== 'closed')
 
+  /** 关键字匹配待关联隐患（已选中的不再出现，最多展示 8 条） */
+  const q = linkQuery.trim()
+  const linkMatches = q
+    ? openIssues
+        .filter((i) => !execForm.issueIds.includes(i.id))
+        .filter((i) => i.title.includes(q) || i.description.includes(q))
+        .slice(0, 8)
+    : []
+
   const submitComplete = (planId: string) => {
     completePlan(planId, {
       executor: execForm.executor.trim(),
@@ -53,6 +69,7 @@ export default function Plans() {
     })
     setCompletingId(null)
     setExecForm({ executor: '', note: '', issueIds: [] })
+    setLinkQuery('')
   }
 
   const submit = () => {
@@ -139,7 +156,7 @@ export default function Plans() {
                   )}
                 </div>
                 <button
-                  onClick={() => setCompletingId(completing ? null : p.id)}
+                  onClick={() => toggleCompleting(p.id)}
                   className="px-3.5 py-1.5 rounded-full border border-[#007AFF] text-[#007AFF] text-[12px] font-medium hover:bg-[#007AFF]/5 transition-colors"
                 >
                   {completing ? '收起' : '完成本次检查'}
@@ -180,27 +197,50 @@ export default function Plans() {
                     />
                   </div>
                   {openIssues.length > 0 && (
-                    <div>
-                      <div className="text-[12px] text-neutral-500 mb-1.5">本次检查发现的隐患（勾选关联，已在库中的）：</div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {openIssues.map((i) => {
-                          const on = execForm.issueIds.includes(i.id)
-                          return (
+                    <div className="space-y-1.5">
+                      <div className="text-[12px] text-neutral-500">关联本次检查发现的隐患（关键字搜索库中记录）：</div>
+                      {/* 已关联的：常驻显示，点 × 取消 */}
+                      {execForm.issueIds.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {execForm.issueIds.map((id) => {
+                            const issue = issues.find((i) => i.id === id)
+                            if (!issue) return null
+                            const label = issue.title.length > 18 ? `${issue.title.slice(0, 18)}…` : issue.title
+                            return (
+                              <button
+                                key={id}
+                                onClick={() => setExecForm({ ...execForm, issueIds: execForm.issueIds.filter((x) => x !== id) })}
+                                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[12px] bg-[#007AFF] text-white"
+                              >
+                                {label}
+                                <X className="w-3 h-3" />
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )}
+                      <input
+                        className={`${inputCls} w-full`}
+                        placeholder="输入关键字搜索（如：配电箱），点结果关联"
+                        value={linkQuery}
+                        onChange={(e) => setLinkQuery(e.target.value)}
+                      />
+                      {q && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {linkMatches.map((i) => (
                             <button
                               key={i.id}
-                              onClick={() =>
-                                setExecForm({
-                                  ...execForm,
-                                  issueIds: on ? execForm.issueIds.filter((x) => x !== i.id) : [...execForm.issueIds, i.id],
-                                })
-                              }
-                              className={`px-2.5 py-1 rounded-full text-[12px] transition-colors ${on ? 'bg-[#007AFF] text-white' : 'bg-white border border-neutral-200 text-neutral-600'}`}
+                              onClick={() => setExecForm({ ...execForm, issueIds: [...execForm.issueIds, i.id] })}
+                              className="px-2.5 py-1 rounded-full text-[12px] bg-white border border-neutral-200 text-neutral-600 hover:border-[#007AFF]/50 hover:text-[#007AFF] transition-colors"
                             >
                               {i.title.length > 18 ? `${i.title.slice(0, 18)}…` : i.title}
                             </button>
-                          )
-                        })}
-                      </div>
+                          ))}
+                          {linkMatches.length === 0 && (
+                            <span className="text-[12px] text-neutral-400">无匹配的未闭环隐患</span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                   <div className="flex justify-end">
