@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { FileUp, Loader2, CheckSquare, Square, ClipboardCheck, ImagePlus, ThumbsUp, X, ChevronDown, ChevronRight, Sparkles } from 'lucide-react'
+import { FileUp, FolderOpen, Loader2, CheckSquare, Square, ClipboardCheck, ImagePlus, ThumbsUp, X, ChevronDown, ChevronRight, Sparkles } from 'lucide-react'
 import { uploadPhotos, useStore } from '@/lib/store'
 import { isManagedWorkshop, TEAMS, countGridOwners, withSubTags } from '@/lib/config'
 import { detectSource, parseFileOffthread, type SkippedPage } from '@/lib/import/parsers'
@@ -154,8 +154,9 @@ export default function IssueEntry() {
     }
   }
 
-  // ── 文件导入（暂存区模式，支持批量多文件） ──
+  // ── 文件导入（暂存区模式，支持批量多文件 / 整文件夹） ──
   const fileRef = useRef<HTMLInputElement>(null)
+  const dirRef = useRef<HTMLInputElement>(null)
   const [parsing, setParsing] = useState(false)
   const [parseStage, setParseStage] = useState('')
   const [importing, setImporting] = useState(false)
@@ -168,9 +169,9 @@ export default function IssueEntry() {
   /** 导入查重：每条草稿与库中既有隐患的疑似重复命中（按草稿 key） */
   const [dupByKey, setDupByKey] = useState<Record<string, SimilarCase[]>>({})
   const [dupOpen, setDupOpen] = useState<string | null>(null)
-  /** 去重自动跳过：批内重复（key→保留条标题）与库中高相似（key→最高命中），这些草稿默认取消勾选，可手动恢复 */
+  /** 同一问题强制跳过：批内标题归一化相同（key→保留条标题）或与库中相似度≥75%（key→最高命中），不可恢复勾选 */
   const [intraDup, setIntraDup] = useState<Record<string, string>>({})
-  const [libDupSkip, setLibDupSkip] = useState<Record<string, SimilarCase>>({})
+  const [sameDup, setSameDup] = useState<Record<string, SimilarCase>>({})
 
   // ── AI 预标注（暂存区批量）：原则二——AI 只预判，人工「采用」后才填入字段 ──
   const [prelabeling, setPrelabeling] = useState(false)
@@ -240,7 +241,7 @@ export default function IssueEntry() {
     setDupByKey({})
     setDupOpen(null)
     setIntraDup({})
-    setLibDupSkip({})
+    setSameDup({})
     try {
       const allDrafts: IssueDraft[] = []
       const allReviews: ReviewDraft[] = []
@@ -299,7 +300,8 @@ export default function IssueEntry() {
       setDrafts(dedupedDrafts)
       setReviews(withMatch)
       setSkipped(allSkipped)
-      // 导入查重：草稿全部入暂存区后，批量比对库中既有隐患，疑似重复的标记出来（不阻断导入，后台完成）
+      // 导入查重：草稿全部入暂存区后，批量比对库中既有隐患（不阻断导入，后台完成）
+      // 规则：≥75% 视为同一问题 → 强制跳过不可勾选；35%~75% 相似问题 → 标出提示，是否录入由用户判断
       api<{ ready: boolean; results: SimilarCase[][] }>('/knowledge/similar-batch', {
         method: 'POST',
         body: JSON.stringify({ texts: dedupedDrafts.map((d) => `${d.title}\n${d.description}`), limit: 2 }),
@@ -307,18 +309,19 @@ export default function IssueEntry() {
         .then((res) => {
           if (!res.ready) return
           const map: Record<string, SimilarCase[]> = {}
-          const autoSkip: Record<string, SimilarCase> = {}
+          const forced: Record<string, SimilarCase> = {}
           dedupedDrafts.forEach((d, i) => {
-            const hits = (res.results[i] ?? []).filter((x) => x.score >= 0.35)
-            if (hits.length) map[d.key] = hits
-            // 高相似（≥60%）视为同一问题重复导入，默认跳过；35%~60% 仅提示人工核对
-            const top = hits[0]
-            if (top && top.score >= 0.6) autoSkip[d.key] = top
+            const top = (res.results[i] ?? [])[0]
+            if (top && top.score >= 0.75) {
+              forced[d.key] = top
+            } else if (top && top.score >= 0.35) {
+              map[d.key] = (res.results[i] ?? []).filter((x) => x.score >= 0.35)
+            }
           })
           setDupByKey(map)
-          if (Object.keys(autoSkip).length) {
-            setLibDupSkip(autoSkip)
-            setDrafts((cur) => cur.map((x) => (autoSkip[x.key] ? { ...x, accepted: false } : x)))
+          if (Object.keys(forced).length) {
+            setSameDup(forced)
+            setDrafts((cur) => cur.map((x) => (forced[x.key] ? { ...x, accepted: false } : x)))
           }
         })
         .catch(() => {})
@@ -800,6 +803,27 @@ export default function IssueEntry() {
             }}
           />
 
+          {/* 文件夹批量导入：整个督察通报目录一次选入（含子文件夹），自动过滤出可解析的通报文件 */}
+          <div className="flex justify-center">
+            <button
+              onClick={() => dirRef.current?.click()}
+              className="flex items-center gap-1.5 text-[13px] text-[#007AFF] hover:underline"
+            >
+              <FolderOpen className="w-4 h-4" />
+              或选择通报文件夹，批量导入里面全部督察通报
+            </button>
+          </div>
+          <input
+            ref={dirRef} type="file" className="hidden" multiple
+            {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
+            onChange={(e) => {
+              const picked = Array.from(e.target.files ?? []).filter((f) => detectSource(f.name))
+              if (picked.length) onPickFiles(picked)
+              else if (Array.from(e.target.files ?? []).length) setParseError('所选文件夹里没有可解析的通报文件（支持 PPT/Word/Excel）')
+              e.target.value = ''
+            }}
+          />
+
           {/* 解析失败提示 */}
           {parseError && (
             <div className="px-4 py-2.5 rounded-xl bg-[#FF3B30]/10 text-[#D70015] text-[13px]">{parseError}</div>
@@ -829,23 +853,12 @@ export default function IssueEntry() {
                   <div className="text-[12px] text-neutral-400">AI 预标注需先在知识库页配置 DeepSeek Key</div>
                 )}
                 {prelabelError && <div className="text-[12px] text-[#D70015]">{prelabelError}</div>}
-                {/* 去重摘要：批内重复 + 库中高相似自动跳过的条目数，可一键恢复 */}
-                {(Object.keys(intraDup).length > 0 || Object.keys(libDupSkip).length > 0) && (
-                  <div className="flex items-center gap-2 flex-wrap text-[12px] text-[#B25000]">
-                    <span>
-                      去重：已自动跳过 {Object.keys(intraDup).length + Object.keys(libDupSkip).length} 条
-                      （批内重复 {Object.keys(intraDup).length} · 与库中疑似重复 {Object.keys(libDupSkip).length}），
-                      勾选项可手动恢复
-                    </span>
-                    <button
-                      onClick={() => {
-                        const keys = new Set([...Object.keys(intraDup), ...Object.keys(libDupSkip)])
-                        setDrafts((cur) => cur.map((x) => (keys.has(x.key) ? { ...x, accepted: true } : x)))
-                      }}
-                      className="text-[#007AFF] hover:underline"
-                    >
-                      全部恢复
-                    </button>
+                {/* 去重摘要：同一问题（批内重复/库中高相似）强制跳过不可恢复；相似问题仅提示，由用户勾选决定 */}
+                {(Object.keys(intraDup).length > 0 || Object.keys(sameDup).length > 0) && (
+                  <div className="text-[12px] text-[#B25000]">
+                    同一问题已强制跳过 {Object.keys(intraDup).length + Object.keys(sameDup).length} 条
+                    （批内重复 {Object.keys(intraDup).length} · 库中已有 {Object.keys(sameDup).length}），不重复录入；
+                    标注「相似」的条目请人工判断是否入库
                   </div>
                 )}
                 <div className="flex flex-wrap gap-1.5">
@@ -881,8 +894,16 @@ export default function IssueEntry() {
                     setDrafts(drafts.map((x) => (x.key === d.key ? { ...x, ...patch } : x)))
                   return (
                     <li key={d.key} className="flex items-start gap-3 p-3 rounded-xl bg-neutral-50 border border-neutral-100">
-                      <button onClick={() => patchDraft({ accepted: !d.accepted })} className="mt-0.5 text-[#007AFF]">
-                        {d.accepted ? <CheckSquare className="w-4.5 h-4.5" /> : <Square className="w-4.5 h-4.5 text-neutral-300" />}
+                      {/* 同一问题（批内重复/库中高相似）强制跳过，禁止勾选 */}
+                      <button
+                        onClick={() => {
+                          if (intraDup[d.key] || sameDup[d.key]) return
+                          patchDraft({ accepted: !d.accepted })
+                        }}
+                        disabled={!!(intraDup[d.key] || sameDup[d.key])}
+                        className="mt-0.5 text-[#007AFF] disabled:cursor-not-allowed"
+                      >
+                        {d.accepted ? <CheckSquare className="w-4.5 h-4.5" /> : <Square className={`w-4.5 h-4.5 ${intraDup[d.key] || sameDup[d.key] ? 'text-neutral-200' : 'text-neutral-300'}`} />}
                       </button>
                       <div className="flex-1 space-y-1.5 min-w-0">
                         <input
@@ -901,21 +922,21 @@ export default function IssueEntry() {
                           </div>
                         )}
                         <div className="flex gap-2 flex-wrap items-center">
-                          {/* 去重跳过原因：批内重复 / 与库中高相似，取消勾选状态可手动恢复 */}
+                          {/* 去重跳过原因：同一问题（批内重复 / 库中高相似）强制跳过，不可恢复 */}
                           {intraDup[d.key] && (
                             <span
                               className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-[#FF3B30]/10 text-[#D70015]"
-                              title={`与本批次「${intraDup[d.key]}」重复，已默认跳过；重新勾选可恢复入库`}
+                              title={`与本批次「${intraDup[d.key]}」是同一问题，不重复录入`}
                             >
-                              批内重复 · 已跳过
+                              同一问题 · 批内重复
                             </span>
                           )}
-                          {libDupSkip[d.key] && (
+                          {sameDup[d.key] && (
                             <span
-                              className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-[#FF9500]/12 text-[#B25000]"
-                              title={`与库中「${libDupSkip[d.key].title}」相似度 ${Math.round(libDupSkip[d.key].score * 100)}%，已默认跳过；重新勾选可恢复入库`}
+                              className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-[#FF3B30]/10 text-[#D70015]"
+                              title={`与库中「${sameDup[d.key].title}」相似度 ${Math.round(sameDup[d.key].score * 100)}%，判定为同一问题，不重复录入`}
                             >
-                              疑似已入库 {Math.round(libDupSkip[d.key].score * 100)}% · 已跳过
+                              同一问题 · 库中已有 {Math.round(sameDup[d.key].score * 100)}%
                             </span>
                           )}
                           <span className={`px-2 py-0.5 rounded-md text-[11px] font-medium ${isManagedWorkshop(d.locationGuess) ? 'bg-[#007AFF]/12 text-[#007AFF]' : 'bg-neutral-500/10 text-neutral-500'}`}>
@@ -995,7 +1016,7 @@ export default function IssueEntry() {
                                 className="w-full flex items-center gap-1.5 text-left text-[12px] text-[#B25000]"
                               >
                                 {open ? <ChevronDown className="w-3 h-3 shrink-0" /> : <ChevronRight className="w-3 h-3 shrink-0" />}
-                                <span className="truncate flex-1">疑似重复：{hit.title}</span>
+                                <span className="truncate flex-1">相似问题：{hit.title}</span>
                                 <span className="shrink-0">{Math.round(hit.score * 100)}%</span>
                                 {hitIssue && <StatusBadge status={hitIssue.status} />}
                               </button>
