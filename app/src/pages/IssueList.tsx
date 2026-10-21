@@ -22,6 +22,12 @@ export default function IssueList() {
   const [locationId, setLocationId] = useState('')
   const [scope, setScope] = useState<'' | 'managed' | 'reference'>('managed')
   const [reviewed, setReviewed] = useState<'' | 'unreviewed' | 'reviewed'>('')
+  /** 发现时间范围筛选（按 foundAt 日期，含边界） */
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  /** 列表分页：每页 20 条 */
+  const [page, setPage] = useState(0)
+  const PAGE_SIZE = 20
   /** 回收站弹窗 */
   const [binOpen, setBinOpen] = useState(false)
   const [binItems, setBinItems] = useState<SafetyIssue[]>([])
@@ -106,9 +112,18 @@ export default function IssueList() {
         .filter((i) => !categoryId || i.categoryId === categoryId)
         .filter((i) => !locationId || i.locationId === locationId)
         .filter((i) => !reviewed || (reviewed === 'unreviewed' ? i.reviewed === false : i.reviewed !== false))
+        // 发现时间范围：ISO 字符串前 10 位即日期，字典序比较即日期比较
+        .filter((i) => !dateFrom || i.foundAt.slice(0, 10) >= dateFrom)
+        .filter((i) => !dateTo || i.foundAt.slice(0, 10) <= dateTo)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-    [issues, q, status, categoryId, locationId, scope, reviewed],
+    [issues, q, status, categoryId, locationId, scope, reviewed, dateFrom, dateTo],
   )
+
+  // 任一筛选条件变化时回到第一页
+  useEffect(() => setPage(0), [q, status, categoryId, locationId, scope, reviewed, dateFrom, dateTo])
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const curPage = Math.min(page, pageCount - 1)
+  const pageItems = filtered.slice(curPage * PAGE_SIZE, (curPage + 1) * PAGE_SIZE)
 
   const transition = (issue: SafetyIssue) => {
     const next = NEXT_ACTION[issue.status]
@@ -276,7 +291,9 @@ export default function IssueList() {
     <div className="max-w-5xl space-y-5">
       <header>
         <h1 className="text-2xl font-semibold">问题库</h1>
-        <p className="text-sm text-neutral-500 mt-1">全部隐患记录 · 共 {issues.length} 条</p>
+        <p className="text-sm text-neutral-500 mt-1">
+          全部隐患记录 · 共 {issues.length} 条{filtered.length !== issues.length && `（筛选后 ${filtered.length} 条）`}
+        </p>
       </header>
 
       {/* 范围页签：成品车间（闭环管理）/ 其他车间（参考） */}
@@ -326,12 +343,24 @@ export default function IssueList() {
           <option value="unreviewed">人工未复核</option>
           <option value="reviewed">人工已复核</option>
         </select>
+        {/* 发现时间范围：ISO 日期前 10 位字典序比较，前后都含当天 */}
+        <div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white border border-neutral-200">
+          <span className="text-[12px] text-neutral-400 shrink-0">发现时间</span>
+          <input type="date" className="text-[13px] outline-none bg-transparent" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+          <span className="text-neutral-300 text-[12px]">至</span>
+          <input type="date" className="text-[13px] outline-none bg-transparent" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          {(dateFrom || dateTo) && (
+            <button onClick={() => { setDateFrom(''); setDateTo('') }} className="text-[12px] text-neutral-400 hover:text-[#D70015]" title="清除时间筛选">
+              ×
+            </button>
+          )}
+        </div>
       </div>
 
       {/* 列表 */}
       <div className="bg-white rounded-2xl shadow-sm divide-y divide-neutral-100">
         {filtered.length === 0 && <p className="text-center text-[13px] text-neutral-400 py-10">没有匹配的隐患记录</p>}
-        {filtered.map((i) => (
+        {pageItems.map((i) => (
           <div key={i.id} className="p-4 flex items-start gap-4">
             <div className="flex-1 min-w-0 space-y-1">
               <div className="flex items-center gap-2 flex-wrap">
@@ -450,6 +479,29 @@ export default function IssueList() {
           </div>
         ))}
       </div>
+
+      {/* 分页控制：库内记录多时只渲染当前页 */}
+      {pageCount > 1 && (
+        <div className="flex items-center justify-center gap-3">
+          <button
+            onClick={() => setPage(curPage - 1)}
+            disabled={curPage === 0}
+            className="px-3 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] text-neutral-600 hover:bg-neutral-50 transition-colors disabled:opacity-30"
+          >
+            上一页
+          </button>
+          <span className="text-[13px] text-neutral-500">
+            第 {curPage + 1} / {pageCount} 页 · 本页 {pageItems.length} 条 / 共 {filtered.length} 条
+          </span>
+          <button
+            onClick={() => setPage(curPage + 1)}
+            disabled={curPage >= pageCount - 1}
+            className="px-3 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] text-neutral-600 hover:bg-neutral-50 transition-colors disabled:opacity-30"
+          >
+            下一页
+          </button>
+        </div>
+      )}
 
       {/* 补传照片的隐藏文件选择器 */}
       <input
