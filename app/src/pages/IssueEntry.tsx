@@ -160,8 +160,9 @@ export default function IssueEntry() {
   const [parsing, setParsing] = useState(false)
   const [parseStage, setParseStage] = useState('')
   const [importing, setImporting] = useState(false)
-  /** 导入进度：已完成照片上传/入库的条数（共 accepted.length 条） */
+  /** 导入进度：已完成照片上传/入库的条数；importTotal 为开始时锁定的总条数（分母必须锁定——导入过程中后台查重返回会改 accepted，实时算分母会"乱跳"） */
   const [uploadDone, setUploadDone] = useState(0)
+  const [importTotal, setImportTotal] = useState(0)
   /** 本次批量解析的文件清单（名称 + 类型） */
   const [sourceFiles, setSourceFiles] = useState<Array<{ name: string; source: IssueSource }>>([])
   const [drafts, setDrafts] = useState<IssueDraft[]>([])
@@ -365,6 +366,7 @@ export default function IssueEntry() {
     const sourceOf = (name?: string) => sourceFiles.find((f) => f.name === name)?.source ?? 'pptx'
     setImporting(true)
     setUploadDone(0)
+    setImportTotal(accepted.length)
     try {
       if (accepted.length) {
         // 并发池：同时只跑 4 条（每条含照片压缩+上传，无限制并发会把主线程打满反而更慢）
@@ -897,7 +899,7 @@ export default function IssueEntry() {
                   {/* AI 预标注：AI 只预判，行内灰色小字展示，人工「采用」才填入字段；未配置 Key 时禁用 */}
                   <button
                     onClick={runPrelabel}
-                    disabled={!llmReady || prelabeling || drafts.length === 0}
+                    disabled={!llmReady || prelabeling || importing || drafts.length === 0}
                     title={llmReady ? '调 DeepSeek 给每条草稿预判类型/等级/根因/整改建议（少于 30 字的条目自动跳过）' : '请先在知识库页「API 配置」中填写 DeepSeek Key'}
                     className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-[#007AFF]/40 text-[#007AFF] text-[12px] font-medium hover:bg-[#007AFF]/8 transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
                   >
@@ -950,7 +952,7 @@ export default function IssueEntry() {
                   <div className="flex items-center gap-1.5">
                     <button
                       onClick={() => setDraftPage(curPage - 1)}
-                      disabled={curPage === 0}
+                      disabled={curPage === 0 || importing}
                       className="px-2.5 py-1 rounded-lg bg-neutral-100 text-[12px] text-neutral-600 hover:bg-neutral-200/70 transition-colors disabled:opacity-30 disabled:hover:bg-neutral-100"
                     >
                       上一页
@@ -960,18 +962,18 @@ export default function IssueEntry() {
                     </span>
                     <button
                       onClick={() => setDraftPage(curPage + 1)}
-                      disabled={curPage >= pageCount - 1}
+                      disabled={curPage >= pageCount - 1 || importing}
                       className="px-2.5 py-1 rounded-lg bg-neutral-100 text-[12px] text-neutral-600 hover:bg-neutral-200/70 transition-colors disabled:opacity-30 disabled:hover:bg-neutral-100"
                     >
                       下一页
                     </button>
                   </div>
                   <div className="flex items-center gap-2">
-                    <button onClick={() => setPageAccepted(true)} className="text-[12px] text-[#007AFF] hover:underline">
+                    <button onClick={() => setPageAccepted(true)} disabled={importing} className="text-[12px] text-[#007AFF] hover:underline disabled:opacity-40">
                       全选本页
                     </button>
                     <span className="text-neutral-300">|</span>
-                    <button onClick={() => setPageAccepted(false)} className="text-[12px] text-neutral-500 hover:underline">
+                    <button onClick={() => setPageAccepted(false)} disabled={importing} className="text-[12px] text-neutral-500 hover:underline disabled:opacity-40">
                       全不选本页
                     </button>
                   </div>
@@ -986,10 +988,10 @@ export default function IssueEntry() {
                       {/* 同一问题（批内重复/库中高相似）强制跳过，禁止勾选 */}
                       <button
                         onClick={() => {
-                          if (intraDup[d.key] || sameDup[d.key]) return
+                          if (intraDup[d.key] || sameDup[d.key] || importing) return
                           patchDraft({ accepted: !d.accepted })
                         }}
-                        disabled={!!(intraDup[d.key] || sameDup[d.key])}
+                        disabled={!!(intraDup[d.key] || sameDup[d.key]) || importing}
                         className="mt-0.5 text-[#007AFF] disabled:cursor-not-allowed"
                       >
                         {d.accepted ? <CheckSquare className="w-4.5 h-4.5" /> : <Square className={`w-4.5 h-4.5 ${intraDup[d.key] || sameDup[d.key] ? 'text-neutral-200' : 'text-neutral-300'}`} />}
@@ -1141,7 +1143,7 @@ export default function IssueEntry() {
                         setReviews(reviews.map((x) => (x.key === r.key ? { ...x, ...patch } : x)))
                       return (
                         <li key={r.key} className="flex items-start gap-3 p-3 rounded-xl bg-[#34C759]/5 border border-[#34C759]/15">
-                          <button onClick={() => patchReview({ accepted: !r.accepted })} className="mt-0.5 text-[#34C759]">
+                          <button onClick={() => !importing && patchReview({ accepted: !r.accepted })} disabled={importing} className="mt-0.5 text-[#34C759] disabled:opacity-40">
                             {r.accepted ? <CheckSquare className="w-4.5 h-4.5" /> : <Square className="w-4.5 h-4.5 text-neutral-300" />}
                           </button>
                           <div className="flex-1 space-y-1 min-w-0">
@@ -1186,7 +1188,7 @@ export default function IssueEntry() {
                 >
                   {importing && <Loader2 className="w-4 h-4 animate-spin" />}
                   {importing
-                    ? `导入中 ${uploadDone}/${drafts.filter((d) => d.accepted).length} 条…`
+                    ? `导入中 ${uploadDone}/${importTotal} 条…`
                     : `确认生效：入库 ${drafts.filter((d) => d.accepted).length} 条${
                         reviews.filter((r) => r.accepted && r.matchedIssueId).length > 0
                           ? ` + 核销 ${reviews.filter((r) => r.accepted && r.matchedIssueId).length} 条`
