@@ -3,18 +3,22 @@ import { Bell, CalendarClock, LayoutTemplate, Plus, Trash2, X } from 'lucide-rea
 import { useStore } from '@/lib/store'
 import { fmtDateTime } from '@/lib/format'
 import { PLAN_FREQUENCY_TEMPLATES } from '@/lib/config'
+import { RiskBadge, StatusBadge, SOURCE_LABEL } from '@/components/badges'
 import type { PlanFrequency } from '@/types'
 
 const FREQ_LABEL: Record<PlanFrequency, string> = { daily: '每日', weekly: '每周', monthly: '每月', quarterly: '每季度' }
 
 export default function Plans() {
-  const { plans, issues, reminders, addPlan, updatePlan, removePlan, completePlan, markReminderRead } = useStore()
+  const { plans, issues, tags, reminders, addPlan, updatePlan, removePlan, completePlan, markReminderRead } = useStore()
   const [form, setForm] = useState({ name: '', scope: '', frequency: 'weekly' as PlanFrequency, nextRunAt: '', remindBeforeMinutes: 60 })
   /** 正在填写执行记录的计划 id */
   const [completingId, setCompletingId] = useState<string | null>(null)
   const [execForm, setExecForm] = useState({ executor: '', note: '', issueIds: [] as string[] })
   /** 关联隐患的关键字搜索词（随表单打开/关闭重置） */
   const [linkQuery, setLinkQuery] = useState('')
+  /** 详情弹窗展示的隐患 id */
+  const [detailId, setDetailId] = useState<string | null>(null)
+  const detailIssue = detailId ? issues.find((i) => i.id === detailId) : undefined
 
   const toggleCompleting = (id: string) => {
     setCompletingId((cur) => (cur === id ? null : id))
@@ -207,14 +211,19 @@ export default function Plans() {
                             if (!issue) return null
                             const label = issue.title.length > 18 ? `${issue.title.slice(0, 18)}…` : issue.title
                             return (
-                              <button
-                                key={id}
-                                onClick={() => setExecForm({ ...execForm, issueIds: execForm.issueIds.filter((x) => x !== id) })}
-                                className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[12px] bg-[#007AFF] text-white"
-                              >
-                                {label}
-                                <X className="w-3 h-3" />
-                              </button>
+                              <span key={id} className="flex items-center rounded-full text-[12px] bg-[#007AFF] text-white overflow-hidden">
+                                {/* 点标题看详情，点 × 取消关联 */}
+                                <button onClick={() => setDetailId(id)} className="px-2.5 py-1 hover:bg-[#0066D6] transition-colors">
+                                  {label}
+                                </button>
+                                <button
+                                  onClick={() => setExecForm({ ...execForm, issueIds: execForm.issueIds.filter((x) => x !== id) })}
+                                  className="pr-2 pl-1 py-1 hover:bg-[#D70015]/80 transition-colors"
+                                  title="取消关联"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </span>
                             )
                           })}
                         </div>
@@ -280,6 +289,73 @@ export default function Plans() {
           ))}
         </div>
       </section>
+
+      {/* 关联隐患详情弹窗：点蓝色 chip 的标题触发 */}
+      {detailIssue && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+          onClick={() => setDetailId(null)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-xl max-w-lg w-full max-h-[80vh] overflow-y-auto p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <h3 className="text-[16px] font-semibold leading-snug">{detailIssue.title}</h3>
+              <button onClick={() => setDetailId(null)} className="p-1 text-neutral-400 hover:text-neutral-600 transition-colors">
+                <X className="w-4.5 h-4.5" />
+              </button>
+            </div>
+            <div className="flex gap-1.5 flex-wrap">
+              <StatusBadge status={detailIssue.status} />
+              <RiskBadge level={detailIssue.riskLevel} />
+              {detailIssue.categoryId && (
+                <span className="px-2 py-0.5 rounded-md text-[12px] font-medium bg-neutral-500/10 text-neutral-500">
+                  {tags.find((t) => t.id === detailIssue.categoryId)?.name ?? '未分类'}
+                </span>
+              )}
+              {detailIssue.locationId && (
+                <span className="px-2 py-0.5 rounded-md text-[12px] font-medium bg-neutral-500/10 text-neutral-500">
+                  {tags.find((t) => t.id === detailIssue.locationId)?.name ?? ''}
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[12px] text-neutral-500">
+              <span>发现时间：{fmtDateTime(detailIssue.foundAt)}</span>
+              {detailIssue.deadline && <span>整改期限：{fmtDateTime(detailIssue.deadline)}</span>}
+              {detailIssue.assignee && <span>整改责任人:{detailIssue.assignee}</span>}
+              <span>
+                来源：{detailIssue.sourceFile ?? SOURCE_LABEL[detailIssue.source] ?? detailIssue.source}
+                {detailIssue.scope === 'reference' && ' · 其他车间参考'}
+              </span>
+              {detailIssue.gridOwner && <span>网格责任人：{detailIssue.gridOwner}</span>}
+              {detailIssue.rechecks.length > 0 && <span>已复查 {detailIssue.rechecks.length} 次</span>}
+            </div>
+            {detailIssue.description && (
+              <div>
+                <div className="text-[12px] text-neutral-400 mb-1">问题描述</div>
+                <p className="text-[13px] text-neutral-700 whitespace-pre-wrap">{detailIssue.description}</p>
+              </div>
+            )}
+            {detailIssue.fixNote && (
+              <div>
+                <div className="text-[12px] text-neutral-400 mb-1">整改措施</div>
+                <p className="text-[13px] text-[#248A3D] whitespace-pre-wrap">{detailIssue.fixNote}</p>
+              </div>
+            )}
+            {(detailIssue.photos?.length ?? 0) > 0 && (
+              <div>
+                <div className="text-[12px] text-neutral-400 mb-1">现场照片（{detailIssue.photos!.length}）</div>
+                <div className="flex flex-wrap gap-2">
+                  {detailIssue.photos!.map((p, idx) => (
+                    <img key={idx} src={p} alt="" className="w-20 h-20 rounded-xl object-cover bg-neutral-100" loading="lazy" />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
