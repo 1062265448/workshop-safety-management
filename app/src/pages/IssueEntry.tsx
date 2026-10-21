@@ -160,6 +160,8 @@ export default function IssueEntry() {
   const [parsing, setParsing] = useState(false)
   const [parseStage, setParseStage] = useState('')
   const [importing, setImporting] = useState(false)
+  /** 导入进度：已完成照片上传/入库的条数（共 accepted.length 条） */
+  const [uploadDone, setUploadDone] = useState(0)
   /** 本次批量解析的文件清单（名称 + 类型） */
   const [sourceFiles, setSourceFiles] = useState<Array<{ name: string; source: IssueSource }>>([])
   const [drafts, setDrafts] = useState<IssueDraft[]>([])
@@ -172,6 +174,26 @@ export default function IssueEntry() {
   /** 同一问题强制跳过：批内标题归一化相同（key→保留条标题）或与库中相似度≥75%（key→最高命中），不可恢复勾选 */
   const [intraDup, setIntraDup] = useState<Record<string, string>>({})
   const [sameDup, setSameDup] = useState<Record<string, SimilarCase>>({})
+
+  // ── 暂存区分页：每页固定条数，整批渲染几百条会明显卡顿 ──
+  const DRAFT_PAGE_SIZE = 20
+  const [draftPage, setDraftPage] = useState(0)
+  /** 照片 objectURL 缓存：同一 File 只建一次 URL，不随重渲染重复创建（旧写法每次渲染都新建，内存只涨不收） */
+  const photoUrlCache = useRef(new Map<File, string>())
+  const urlOf = (f: File): string => {
+    let u = photoUrlCache.current.get(f)
+    if (!u) {
+      u = URL.createObjectURL(f)
+      photoUrlCache.current.set(f, u)
+    }
+    return u
+  }
+  const clearPhotoUrls = () => {
+    for (const u of photoUrlCache.current.values()) URL.revokeObjectURL(u)
+    photoUrlCache.current.clear()
+  }
+  // 离开录入页时回收全部 objectURL
+  useEffect(() => clearPhotoUrls, [])
 
   // ── AI 预标注（暂存区批量）：原则二——AI 只预判，人工「采用」后才填入字段 ──
   const [prelabeling, setPrelabeling] = useState(false)
@@ -242,6 +264,8 @@ export default function IssueEntry() {
     setDupOpen(null)
     setIntraDup({})
     setSameDup({})
+    setDraftPage(0)
+    clearPhotoUrls()
     try {
       const allDrafts: IssueDraft[] = []
       const allReviews: ReviewDraft[] = []
@@ -340,10 +364,27 @@ export default function IssueEntry() {
     // 文件名 → 解析类型映射（批量导入时各文件类型可能不同）
     const sourceOf = (name?: string) => sourceFiles.find((f) => f.name === name)?.source ?? 'pptx'
     setImporting(true)
+    setUploadDone(0)
     try {
       if (accepted.length) {
-        const items = await Promise.all(
-          accepted.map(async (d) => {
+        // 并发池：同时只跑 4 条（每条含照片压缩+上传，无限制并发会把主线程打满反而更慢）
+        const runPool = async <T,>(tasks: Array<() => Promise<T>>, size: number): Promise<T[]> => {
+          const out = new Array<T>(tasks.length)
+          let cursor = 0
+          let finished = 0
+          const worker = async () => {
+            while (cursor < tasks.length) {
+              const i = cursor++
+              out[i] = await tasks[i]()
+              finished++
+              setUploadDone(finished)
+            }
+          }
+          await Promise.all(Array.from({ length: Math.min(size, tasks.length) }, worker))
+          return out
+        }
+        const items = await runPool(
+          accepted.map((d) => async () => {
             const foundAt = d.foundAtGuess ?? new Date().toISOString()
             const managed = isManagedWorkshop(d.locationGuess)
             // 先上传该页提取的现场照片，再把路径随隐患入库
@@ -382,6 +423,7 @@ export default function IssueEntry() {
               aiSuggestion: d.ai && !d.ai.skipped && !d.ai.error ? d.ai.suggestion ?? null : null,
             }
           }),
+          4,
         )
         addIssues(items)
       }
@@ -402,6 +444,8 @@ export default function IssueEntry() {
       setSourceFiles([])
       setDupByKey({})
       setDupOpen(null)
+      clearPhotoUrls()
+      setUploadDone(0)
       navigate('/issues')
     } catch (e) {
       // 照片上传/入库失败要让用户看见原因，不能默默卡死
@@ -412,6 +456,18 @@ export default function IssueEntry() {
   }
 
   const inputCls = 'w-full px-3.5 py-2.5 rounded-xl bg-neutral-100/80 text-[14px] outline-none focus:ring-2 ring-[#007AFF]/30 transition-shadow'
+
+  // ── 暂存区分页计算：只渲染当前页 20 条，勾选状态存在完整 drafts 里不受影响 ──
+  const pageCount = Math.max(1, Math.ceil(drafts.length / DRAFT_PAGE_SIZE))
+  const curPage = Math.min(draftPage, pageCount - 1)
+  const pageDrafts = drafts.slice(curPage * DRAFT_PAGE_SIZE, (curPage + 1) * DRAFT_PAGE_SIZE)
+  /** 本页全选/全不选：只作用于当前页可勾选的条目（同一问题强制跳过的不动） */
+  const setPageAccepted = (accepted: boolean) =>
+    setDrafts((cur) =>
+      cur.map((x) =>
+        pageDrafts.some((p) => p.key === x.key) && !(intraDup[x.key] || sameDup[x.key]) ? { ...x, accepted } : x,
+      ),
+    )
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -888,8 +944,41 @@ export default function IssueEntry() {
                   </ul>
                 </details>
               )}
+              {/* 分页控制：整批几百条只渲染当前页 20 条，勾选状态跨页保留 */}
+              {pageCount > 1 && (
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => setDraftPage(curPage - 1)}
+                      disabled={curPage === 0}
+                      className="px-2.5 py-1 rounded-lg bg-neutral-100 text-[12px] text-neutral-600 hover:bg-neutral-200/70 transition-colors disabled:opacity-30 disabled:hover:bg-neutral-100"
+                    >
+                      上一页
+                    </button>
+                    <span className="text-[12px] text-neutral-500 px-1">
+                      第 {curPage + 1} / {pageCount} 页 · 本页 {pageDrafts.length} 条 / 共 {drafts.length} 条
+                    </span>
+                    <button
+                      onClick={() => setDraftPage(curPage + 1)}
+                      disabled={curPage >= pageCount - 1}
+                      className="px-2.5 py-1 rounded-lg bg-neutral-100 text-[12px] text-neutral-600 hover:bg-neutral-200/70 transition-colors disabled:opacity-30 disabled:hover:bg-neutral-100"
+                    >
+                      下一页
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setPageAccepted(true)} className="text-[12px] text-[#007AFF] hover:underline">
+                      全选本页
+                    </button>
+                    <span className="text-neutral-300">|</span>
+                    <button onClick={() => setPageAccepted(false)} className="text-[12px] text-neutral-500 hover:underline">
+                      全不选本页
+                    </button>
+                  </div>
+                </div>
+              )}
               <ul className="space-y-2">
-                {drafts.map((d) => {
+                {pageDrafts.map((d) => {
                   const patchDraft = (patch: Partial<IssueDraft>) =>
                     setDrafts(drafts.map((x) => (x.key === d.key ? { ...x, ...patch } : x)))
                   return (
@@ -916,7 +1005,7 @@ export default function IssueEntry() {
                         {(d.photos?.length ?? 0) > 0 && (
                           <div className="flex gap-1.5 flex-wrap items-center">
                             {d.photos!.map((f, i) => (
-                              <img key={i} src={URL.createObjectURL(f)} alt="" className="w-12 h-12 rounded-md object-cover bg-neutral-200" />
+                              <img key={i} src={urlOf(f)} alt="" className="w-12 h-12 rounded-md object-cover bg-neutral-200" />
                             ))}
                             <span className="text-[11px] text-neutral-400">{d.photos!.length} 张现场照片随隐患入库</span>
                           </div>
@@ -1066,7 +1155,7 @@ export default function IssueEntry() {
                             {(r.photos?.length ?? 0) > 0 && (
                               <div className="flex gap-1.5 flex-wrap items-center">
                                 {r.photos!.map((f, i) => (
-                                  <img key={i} src={URL.createObjectURL(f)} alt="" className="w-12 h-12 rounded-md object-cover bg-neutral-200" />
+                                  <img key={i} src={urlOf(f)} alt="" className="w-12 h-12 rounded-md object-cover bg-neutral-200" />
                                 ))}
                                 <span className="text-[11px] text-neutral-400">{r.photos!.length} 张整改照片随核销追加</span>
                               </div>
@@ -1097,7 +1186,7 @@ export default function IssueEntry() {
                 >
                   {importing && <Loader2 className="w-4 h-4 animate-spin" />}
                   {importing
-                    ? '照片上传中…'
+                    ? `导入中 ${uploadDone}/${drafts.filter((d) => d.accepted).length} 条…`
                     : `确认生效：入库 ${drafts.filter((d) => d.accepted).length} 条${
                         reviews.filter((r) => r.accepted && r.matchedIssueId).length > 0
                           ? ` + 核销 ${reviews.filter((r) => r.accepted && r.matchedIssueId).length} 条`

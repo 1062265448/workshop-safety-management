@@ -424,15 +424,9 @@ export class KnowledgeService {
     if (queries.length === 0) return { ready: this.embedding.ready, results: [] }
     if (!this.embedding.ready) return { ready: false, results: queries.map(() => []) }
     const vecs = await this.embedding.embed(queries, true)
-    const results = [] as { issueId: string; title: string; score: number; vec: number; snippet: string }[][]
-    for (let i = 0; i < queries.length; i++) {
-      if (!queries[i]) {
-        results.push([])
-        continue
-      }
-      const rows = await this.issueCandidates(vecs[i])
-      results.push(this.hybridRank(queries[i], vecs[i], rows, limit))
-    }
+    // 逐条候选查询并行发起（原串行 await：50 条 = 50 次顺序 DB 往返，导入大文件夹时查重明显拖尾）
+    const rowsArr = await Promise.all(queries.map((q, i) => (q ? this.issueCandidates(vecs[i]) : Promise.resolve([]))))
+    const results = queries.map((q, i) => (q ? this.hybridRank(queries[i], vecs[i], rowsArr[i], limit) : []))
     return { ready: true, results }
   }
 
