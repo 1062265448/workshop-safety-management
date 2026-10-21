@@ -291,3 +291,19 @@ model KnowledgeChunk {
   @@index([docId])
   @@map("knowledge_chunks")
 }
+
+/// 钉钉通报自动导入台账：一条群文件消息一条记录，幂等防重复导入
+model DingtalkImport {
+  id         String   @id @default(cuid())
+  messageId  String   @unique
+  fileId     String
+  fileName   String
+  sizeBytes  Int      @default(0)
+  issueCount Int      @default(0)
+  dupCount   Int      @default(0)
+  status     String   @default("ok")
+  error      String?
+  createdAt  DateTime @default(now())
+
+  @@map("dingtalk_imports")
+}

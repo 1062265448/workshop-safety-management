@@ -15,6 +15,7 @@ import { KnowledgeModule } from './modules/knowledge/knowledge.module'
 import { RegulationsModule } from './modules/regulations/regulations.module'
 import { PrelabelModule } from './modules/issues/prelabel.module'
 import { BackupModule } from './modules/backup/backup.module'
+import { DingtalkModule } from './modules/dingtalk/dingtalk.module'
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { BackupModule } from './modules/backup/backup.module'
     RegulationsModule,
     PrelabelModule,
     BackupModule,
+    DingtalkModule,
   ],
   providers: [
     // 全局守卫：AuthGuard 先认证，RolesGuard 再按角色授权（@Roles 显式声明 > 默认 viewer 只读）

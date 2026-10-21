@@ -36,3 +36,7 @@ wsms-backup-*.dump
 
 # 每日自动备份产物（scripts/backup.ps1 生成，含 uploads 镜像与日志，不入库）
 backups/
+
+# 钉钉通报原始文件（体积大，不入库；台账在数据库）
+backend/inbox/
+dingtalk-sync/

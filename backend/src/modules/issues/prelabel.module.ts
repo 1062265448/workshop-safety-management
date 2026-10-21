@@ -349,5 +349,6 @@ export class PrelabelController {
   imports: [KnowledgeModule],
   controllers: [PrelabelController],
   providers: [PrelabelService, PrismaService],
+  exports: [PrelabelService],
 })
 export class PrelabelModule {}

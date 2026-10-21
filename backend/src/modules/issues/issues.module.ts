@@ -4,10 +4,12 @@ import { KnowledgeModule } from '../knowledge/knowledge.module'
 import { AssessmentsModule } from '../assessments/assessments.module'
 import { IssuesController } from './issues.controller'
 import { IssuesService } from './issues.service'
+export { IssuesService } from './issues.service'
 
 @Module({
   imports: [KnowledgeModule, AssessmentsModule],
   controllers: [IssuesController],
   providers: [IssuesService, PrismaService],
+  exports: [IssuesService],
 })
 export class IssuesModule {}
