@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { FileUp, FolderOpen, Loader2, CheckSquare, Square, ClipboardCheck, ImagePlus, ThumbsUp, X, ChevronDown, ChevronRight, Sparkles } from 'lucide-react'
+import { FileUp, FolderOpen, Loader2, CheckSquare, Square, ClipboardCheck, ImagePlus, ThumbsUp, X, ChevronDown, ChevronRight, Sparkles, CheckCircle2 } from 'lucide-react'
 import { uploadPhotos, useStore } from '@/lib/store'
 import { isManagedWorkshop, TEAMS, countGridOwners, withSubTags } from '@/lib/config'
 import { detectSource, parseFileOffthread, type SkippedPage } from '@/lib/import/parsers'
@@ -163,6 +163,8 @@ export default function IssueEntry() {
   /** 导入进度：已完成照片上传/入库的条数；importTotal 为开始时锁定的总条数（分母必须锁定——导入过程中后台查重返回会改 accepted，实时算分母会"乱跳"） */
   const [uploadDone, setUploadDone] = useState(0)
   const [importTotal, setImportTotal] = useState(0)
+  /** 导入成功标识：按钮处亮绿勾，停留后再跳转 */
+  const [importOk, setImportOk] = useState(false)
   /** 本次批量解析的文件清单（名称 + 类型） */
   const [sourceFiles, setSourceFiles] = useState<Array<{ name: string; source: IssueSource }>>([])
   const [drafts, setDrafts] = useState<IssueDraft[]>([])
@@ -440,6 +442,9 @@ export default function IssueEntry() {
           photos: [...(target?.photos ?? []), ...added].slice(0, 9),
         })
       }
+      // 成功标识：先在按钮处亮绿勾停留 1.4 秒，让用户确认入库结果，再清空跳转
+      setImportOk(true)
+      await new Promise((r) => setTimeout(r, 1400))
       setDrafts([])
       setReviews([])
       setSkipped([])
@@ -454,6 +459,7 @@ export default function IssueEntry() {
       setParseError(e instanceof Error ? e.message : '导入失败，请重试')
     } finally {
       setImporting(false)
+      setImportOk(false)
     }
   }
 
@@ -1180,20 +1186,35 @@ export default function IssueEntry() {
               )}
 
               <div className="flex items-center justify-end gap-3 pt-1">
-                <span className="text-[12px] text-neutral-400">整改期限按风险等级默认：重大 3 天 / 一般 15 天 / 即知即改当天</span>
+                {importOk ? (
+                  <span className="text-[12px] text-[#248A3D]">入库成功，正在跳转问题库…</span>
+                ) : (
+                  <span className="text-[12px] text-neutral-400">整改期限按风险等级默认：重大 3 天 / 一般 15 天 / 即知即改当天</span>
+                )}
                 <button
                   onClick={confirmImport}
                   disabled={importing}
-                  className="px-5 py-2 rounded-full bg-[#007AFF] text-white text-[14px] font-medium hover:bg-[#0066D6] transition-colors disabled:opacity-40 flex items-center gap-2"
+                  className={`px-5 py-2 rounded-full text-[14px] font-medium flex items-center gap-2 transition-colors disabled:opacity-40 ${
+                    importOk ? 'bg-[#34C759] text-white' : 'bg-[#007AFF] text-white hover:bg-[#0066D6]'
+                  }`}
                 >
-                  {importing && <Loader2 className="w-4 h-4 animate-spin" />}
-                  {importing
-                    ? `导入中 ${uploadDone}/${importTotal} 条…`
-                    : `确认生效：入库 ${drafts.filter((d) => d.accepted).length} 条${
-                        reviews.filter((r) => r.accepted && r.matchedIssueId).length > 0
-                          ? ` + 核销 ${reviews.filter((r) => r.accepted && r.matchedIssueId).length} 条`
-                          : ''
-                      }`}
+                  {importOk ? (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" />
+                      已成功入库 {importTotal} 条
+                    </>
+                  ) : (
+                    <>
+                      {importing && <Loader2 className="w-4 h-4 animate-spin" />}
+                      {importing
+                        ? `导入中 ${uploadDone}/${importTotal} 条…`
+                        : `确认生效：入库 ${drafts.filter((d) => d.accepted).length} 条${
+                            reviews.filter((r) => r.accepted && r.matchedIssueId).length > 0
+                              ? ` + 核销 ${reviews.filter((r) => r.accepted && r.matchedIssueId).length} 条`
+                              : ''
+                          }`}
+                    </>
+                  )}
                 </button>
               </div>
             </div>
