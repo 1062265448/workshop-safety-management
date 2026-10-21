@@ -100,9 +100,8 @@ async function compressPhoto(file: File): Promise<File> {
   }
 }
 
-/** 上传隐患照片，返回可持久化的路径列表（/uploads/xxx） */
-export async function uploadPhotos(files: File[]): Promise<string[]> {
-  if (!files.length) return []
+/** 单块上传（≤3 张），失败抛错由调用方处理 */
+async function uploadChunk(files: File[]): Promise<string[]> {
   const token = localStorage.getItem('wsms-token')
   const fd = new FormData()
   for (const f of files) fd.append('files', await compressPhoto(f))
@@ -114,6 +113,23 @@ export async function uploadPhotos(files: File[]): Promise<string[]> {
   if (!res.ok) throw new Error(`照片上传失败 → ${res.status}`)
   const data = (await res.json()) as { paths: string[] }
   return data.paths
+}
+
+/** 上传隐患照片，返回可持久化的路径列表（/uploads/xxx）
+ *  公网隧道（cloudflared）对大体积单请求容易 502，故每请求最多 3 张、失败自动重试一次；
+ *  重试成功时前一次可能残留孤儿文件（无数据库引用，无害，定期清 uploads 即可） */
+export async function uploadPhotos(files: File[]): Promise<string[]> {
+  if (!files.length) return []
+  const paths: string[] = []
+  for (let i = 0; i < files.length; i += 3) {
+    const chunk = files.slice(i, i + 3)
+    try {
+      paths.push(...(await uploadChunk(chunk)))
+    } catch {
+      paths.push(...(await uploadChunk(chunk))) // 失败重试一次，仍失败则异常向上抛
+    }
+  }
+  return paths
 }
 
 export function StoreProvider({ children }: { children: ReactNode }) {
