@@ -14,6 +14,10 @@ async function bootstrap() {
   // 单端口同源架构（后端托管前端），无需放开跨域；公网部署杜绝任意来源调用 API
   app.enableCors({ origin: false })
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }))
+  // 请求体上限放宽到 10MB：默认 100kb，整文件夹批量导入后一次预标注/查重的
+  // JSON（几百条草稿的标题+描述）会超过限触发 413 Payload Too Large
+  app.useBodyParser('json', { limit: '10mb' })
+  app.useBodyParser('urlencoded', { limit: '10mb', extended: true })
 
   // gzip 压缩：公网隧道带宽小（家庭宽带上行），1.5MB JS 压到约 1/4，首屏明显变快
   app.use(compression())
