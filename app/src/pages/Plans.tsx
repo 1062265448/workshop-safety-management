@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Bell, CalendarClock, LayoutTemplate, Plus, Trash2, X } from 'lucide-react'
+import { Bell, CalendarClock, ChevronLeft, ChevronRight, LayoutTemplate, Plus, Trash2, X } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { fmtDateTime } from '@/lib/format'
 import { PLAN_FREQUENCY_TEMPLATES } from '@/lib/config'
@@ -19,6 +19,8 @@ export default function Plans() {
   /** 详情弹窗展示的隐患 id */
   const [detailId, setDetailId] = useState<string | null>(null)
   const detailIssue = detailId ? issues.find((i) => i.id === detailId) : undefined
+  /** 照片放大查看（大图遮罩，支持左右切换） */
+  const [photoView, setPhotoView] = useState<{ list: string[]; index: number } | null>(null)
 
   const toggleCompleting = (id: string) => {
     setCompletingId((cur) => (cur === id ? null : id))
@@ -348,11 +350,52 @@ export default function Plans() {
                 <div className="text-[12px] text-neutral-400 mb-1">现场照片（{detailIssue.photos!.length}）</div>
                 <div className="flex flex-wrap gap-2">
                   {detailIssue.photos!.map((p, idx) => (
-                    <img key={idx} src={p} alt="" className="w-20 h-20 rounded-xl object-cover bg-neutral-100" loading="lazy" />
+                    <img
+                      key={idx}
+                      src={p}
+                      alt=""
+                      loading="lazy"
+                      onClick={() => setPhotoView({ list: detailIssue.photos!, index: idx })}
+                      className="w-20 h-20 rounded-xl object-cover bg-neutral-100 cursor-zoom-in hover:ring-2 ring-[#007AFF]/50 transition-shadow"
+                    />
                   ))}
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 照片放大查看：点详情框里的照片缩略图触发（与问题库大图交互一致） */}
+      {photoView && photoView.list.length > 0 && (
+        <div className="fixed inset-0 z-[60] bg-black/85 flex flex-col items-center justify-center p-4" onClick={() => setPhotoView(null)}>
+          <div className="relative max-w-3xl w-full flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+            <img src={photoView.list[photoView.index]} alt="" className="max-h-[76vh] max-w-full rounded-xl object-contain" />
+            {photoView.list.length > 1 && (
+              <>
+                <button
+                  onClick={() => setPhotoView({ list: photoView.list, index: (photoView.index - 1 + photoView.list.length) % photoView.list.length })}
+                  className="absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/50 text-white flex items-center justify-center hover:bg-black/70"
+                >
+                  <ChevronLeft className="w-5 h-5" />
+                </button>
+                <button
+                  onClick={() => setPhotoView({ list: photoView.list, index: (photoView.index + 1) % photoView.list.length })}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/50 text-white flex items-center justify-center hover:bg-black/70"
+                >
+                  <ChevronRight className="w-5 h-5" />
+                </button>
+              </>
+            )}
+          </div>
+          <div className="mt-3 flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+            <span className="text-white/70 text-[12px]">{photoView.index + 1} / {photoView.list.length}</span>
+            <button
+              onClick={() => setPhotoView(null)}
+              className="px-3 py-1.5 rounded-full bg-white/12 text-white/85 text-[12px] hover:bg-white/20"
+            >
+              关闭
+            </button>
           </div>
         </div>
       )}
