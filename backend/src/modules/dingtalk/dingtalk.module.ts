@@ -14,7 +14,7 @@ import { readFileSync, renameSync, existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { PrismaService } from '../../prisma.service'
 import { IssuesModule, IssuesService } from '../issues/issues.module'
-import { KnowledgeModule, KnowledgeService } from '../knowledge/knowledge.module'
+import { KnowledgeModule, KnowledgeService, dupMetaVerdict } from '../knowledge/knowledge.module'
 import { PrelabelModule, PrelabelService } from '../issues/prelabel.module'
 import { Roles } from '../auth/auth.module'
 import { parsePptxServer } from './server-parser'
@@ -141,9 +141,14 @@ export class DingtalkService {
             ;(d as { categoryId?: string }).categoryId = await this.ensureTagId(d.categoryGuess, 'category')
             ;(d as { locationId?: string }).locationId = await this.ensureTagId(d.locationGuess, 'location')
           }
-          // 4. 库内查重：≥75% 判定同一问题，跳过（与导入页规则一致）
+          // 4. 库内查重：≥75% 判定同一问题，跳过（与导入页规则一致）；
+          //    元数据严格核对：车间、日期明确不同的不算同一问题，照常入库
           const sim = await this.knowledge.similarBatch(parsed.drafts.map((d) => `${d.title}\n${d.description}`), 1)
-          const accepted = parsed.drafts.filter((_, i) => !((sim.results[i]?.[0]?.score ?? 0) >= 0.75))
+          const accepted = parsed.drafts.filter((d, i) => {
+            const hit = sim.results[i]?.[0]
+            if (!hit || hit.score < 0.75) return true
+            return dupMetaVerdict({ locationName: d.locationGuess, foundAt: d.foundAtGuess }, hit) !== 'diff'
+          })
           summary.dups += parsed.drafts.length - accepted.length
           // 5. 可选 AI 预标注（批处理化：20 条/块一次往返）
           let ai = accepted.map(() => null as null | { categoryName?: string | null; riskLevel?: string | null; suggestion?: string | null })

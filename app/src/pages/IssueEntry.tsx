@@ -9,7 +9,22 @@ import { RISK_LABEL, RiskBadge, StatusBadge, CAUSE_TYPE_LABEL, COUNTERMEASURE_LA
 import type { CauseType, CountermeasureLevel, IssueDraft, IssueSource, PrelabelSuggestion, ReviewDraft, RiskLevel, StyleCheckResult } from '@/types'
 
 // ── 录入联动：与知识库语义比对，提示相似既有隐患 ──
-interface SimilarCase { issueId: string; title: string; score: number; snippet: string }
+interface SimilarCase { issueId: string; title: string; score: number; snippet: string; locationName?: string | null; foundAt?: string | null; status?: string | null }
+
+/** 查重元数据核对：车间、日期任一明确不同 → 'diff'（不算同一问题）；信息缺失时不做否定判断（与后端 dupMetaVerdict 规则一致） */
+function dupMetaVerdict(
+  draft: { locationName?: string | null; foundAt?: string | null },
+  hit: { locationName?: string | null; foundAt?: string | null },
+): 'same' | 'diff' {
+  const aLoc = (draft.locationName ?? '').trim()
+  const bLoc = (hit.locationName ?? '').trim()
+  if (aLoc && bLoc && aLoc !== bLoc) return 'diff'
+  const day = (v?: string | null): string => (v ? /^(\d{4}-\d{2}-\d{2})/.exec(v)?.[1] ?? '' : '')
+  const aDay = day(draft.foundAt)
+  const bDay = day(hit.foundAt)
+  if (aDay && bDay && aDay !== bDay) return 'diff'
+  return 'same'
+}
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const token = localStorage.getItem('wsms-token')
@@ -174,9 +189,12 @@ export default function IssueEntry() {
   /** 导入查重：每条草稿与库中既有隐患的疑似重复命中（按草稿 key） */
   const [dupByKey, setDupByKey] = useState<Record<string, SimilarCase[]>>({})
   const [dupOpen, setDupOpen] = useState<string | null>(null)
-  /** 同一问题强制跳过：批内标题归一化相同（key→保留条标题）或与库中相似度≥75%（key→最高命中），不可恢复勾选 */
+  /** 同一问题默认跳过：批内标题归一化相同（key→保留条标题）；库中相似度≥75% 且车间/日期不冲突（key→最高命中）。
+   *  库中命中的可点开详情弹窗人工改选是否导入 */
   const [intraDup, setIntraDup] = useState<Record<string, string>>({})
   const [sameDup, setSameDup] = useState<Record<string, SimilarCase>>({})
+  /** 库中重复项详情弹窗：当前查看的草稿 key */
+  const [dupDetailKey, setDupDetailKey] = useState<string | null>(null)
 
   // ── 暂存区分页：每页固定条数，整批渲染几百条会明显卡顿 ──
   const DRAFT_PAGE_SIZE = 20
@@ -328,7 +346,9 @@ export default function IssueEntry() {
       setReviews(withMatch)
       setSkipped(allSkipped)
       // 导入查重：草稿全部入暂存区后，批量比对库中既有隐患（不阻断导入，后台完成）
-      // 规则：≥75% 视为同一问题 → 强制跳过不可勾选；35%~75% 相似问题 → 标出提示，是否录入由用户判断
+      // 规则：≥75% 且车间/日期不冲突 → 判定同一问题，默认跳过（可点开详情改选导入）；
+      //       ≥75% 但车间或日期明确不同 → 不算同一问题，降级到「相似」提示由人工判断；
+      //       35%~75% 相似问题 → 标出提示，是否录入由用户判断
       api<{ ready: boolean; results: SimilarCase[][] }>('/knowledge/similar-batch', {
         method: 'POST',
         body: JSON.stringify({ texts: dedupedDrafts.map((d) => `${d.title}\n${d.description}`), limit: 2 }),
@@ -338,11 +358,14 @@ export default function IssueEntry() {
           const map: Record<string, SimilarCase[]> = {}
           const forced: Record<string, SimilarCase> = {}
           dedupedDrafts.forEach((d, i) => {
-            const top = (res.results[i] ?? [])[0]
-            if (top && top.score >= 0.75) {
+            const hits = res.results[i] ?? []
+            const top = hits[0]
+            if (!top) return
+            const metaDiff = dupMetaVerdict({ locationName: d.locationGuess, foundAt: d.foundAtGuess }, top) === 'diff'
+            if (top.score >= 0.75 && !metaDiff) {
               forced[d.key] = top
-            } else if (top && top.score >= 0.35) {
-              map[d.key] = (res.results[i] ?? []).filter((x) => x.score >= 0.35)
+            } else if (top.score >= 0.35) {
+              map[d.key] = hits.filter((x) => x.score >= 0.35)
             }
           })
           setDupByKey(map)
@@ -469,7 +492,7 @@ export default function IssueEntry() {
   const pageCount = Math.max(1, Math.ceil(drafts.length / DRAFT_PAGE_SIZE))
   const curPage = Math.min(draftPage, pageCount - 1)
   const pageDrafts = drafts.slice(curPage * DRAFT_PAGE_SIZE, (curPage + 1) * DRAFT_PAGE_SIZE)
-  /** 本页全选/全不选：只作用于当前页可勾选的条目（同一问题强制跳过的不动） */
+  /** 本页全选/全不选：只作用于当前页普通条目（批内重复、库中已有的逐条决定，不被批量操作覆盖） */
   const setPageAccepted = (accepted: boolean) =>
     setDrafts((cur) =>
       cur.map((x) =>
@@ -917,12 +940,12 @@ export default function IssueEntry() {
                   <div className="text-[12px] text-neutral-400">AI 预标注需先在知识库页配置 DeepSeek Key</div>
                 )}
                 {prelabelError && <div className="text-[12px] text-[#D70015]">{prelabelError}</div>}
-                {/* 去重摘要：同一问题（批内重复/库中高相似）强制跳过不可恢复；相似问题仅提示，由用户勾选决定 */}
+                {/* 去重摘要：批内重复不可勾选；库中已有默认跳过但可点开详情改选；相似问题由人工判断 */}
                 {(Object.keys(intraDup).length > 0 || Object.keys(sameDup).length > 0) && (
                   <div className="text-[12px] text-[#B25000]">
-                    同一问题已强制跳过 {Object.keys(intraDup).length + Object.keys(sameDup).length} 条
-                    （批内重复 {Object.keys(intraDup).length} · 库中已有 {Object.keys(sameDup).length}），不重复录入；
-                    标注「相似」的条目请人工判断是否入库
+                    判定为同一问题默认跳过 {Object.keys(intraDup).length + Object.keys(sameDup).length} 条
+                    （批内重复 {Object.keys(intraDup).length} · 库中已有 {Object.keys(sameDup).length}）；
+                    点「库中已有」徽标可查看库中详情并改选导入，标注「相似」的条目请人工判断是否入库
                   </div>
                 )}
                 <div className="flex flex-wrap gap-1.5">
@@ -991,16 +1014,16 @@ export default function IssueEntry() {
                     setDrafts(drafts.map((x) => (x.key === d.key ? { ...x, ...patch } : x)))
                   return (
                     <li key={d.key} className="flex items-start gap-3 p-3 rounded-xl bg-neutral-50 border border-neutral-100">
-                      {/* 同一问题（批内重复/库中高相似）强制跳过，禁止勾选 */}
+                      {/* 勾选：批内重复（真重复）禁止勾选；库中已有条目默认可改选——点开「库中已有」徽标查看详情后决定 */}
                       <button
                         onClick={() => {
-                          if (intraDup[d.key] || sameDup[d.key] || importing) return
+                          if (intraDup[d.key] || importing) return
                           patchDraft({ accepted: !d.accepted })
                         }}
-                        disabled={!!(intraDup[d.key] || sameDup[d.key]) || importing}
+                        disabled={!!intraDup[d.key] || importing}
                         className="mt-0.5 text-[#007AFF] disabled:cursor-not-allowed"
                       >
-                        {d.accepted ? <CheckSquare className="w-4.5 h-4.5" /> : <Square className={`w-4.5 h-4.5 ${intraDup[d.key] || sameDup[d.key] ? 'text-neutral-200' : 'text-neutral-300'}`} />}
+                        {d.accepted ? <CheckSquare className="w-4.5 h-4.5" /> : <Square className={`w-4.5 h-4.5 ${intraDup[d.key] ? 'text-neutral-200' : 'text-neutral-300'}`} />}
                       </button>
                       <div className="flex-1 space-y-1.5 min-w-0">
                         <input
@@ -1029,12 +1052,13 @@ export default function IssueEntry() {
                             </span>
                           )}
                           {sameDup[d.key] && (
-                            <span
-                              className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-[#FF3B30]/10 text-[#D70015]"
-                              title={`与库中「${sameDup[d.key].title}」相似度 ${Math.round(sameDup[d.key].score * 100)}%，判定为同一问题，不重复录入`}
+                            <button
+                              onClick={() => !importing && setDupDetailKey(d.key)}
+                              title={`与库中「${sameDup[d.key].title}」相似度 ${Math.round(sameDup[d.key].score * 100)}%，判定为同一问题，默认不录入；点击查看库中详情，可改选导入`}
+                              className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-[#FF3B30]/10 text-[#D70015] hover:bg-[#FF3B30]/20 transition-colors"
                             >
-                              同一问题 · 库中已有 {Math.round(sameDup[d.key].score * 100)}%
-                            </span>
+                              同一问题 · 库中已有 {Math.round(sameDup[d.key].score * 100)}%（点击复核）
+                            </button>
                           )}
                           <span className={`px-2 py-0.5 rounded-md text-[11px] font-medium ${isManagedWorkshop(d.locationGuess) ? 'bg-[#007AFF]/12 text-[#007AFF]' : 'bg-neutral-500/10 text-neutral-500'}`}>
                             {isManagedWorkshop(d.locationGuess) ? '成品车间 · 纳入闭环' : '其他车间 · 仅参考'}
@@ -1221,6 +1245,81 @@ export default function IssueEntry() {
           )}
         </section>
       )}
+
+      {/* 同一问题复核弹窗：展示库中重复项详情，人工决定是否仍要导入 */}
+      {dupDetailKey && sameDup[dupDetailKey] && (() => {
+        const hit = sameDup[dupDetailKey]
+        const draft = drafts.find((x) => x.key === dupDetailKey)
+        const hitIssue = issues.find((i) => i.id === hit.issueId)
+        const locMismatch = !!(draft?.locationGuess && hit.locationName && draft.locationGuess.trim() !== hit.locationName.trim())
+        const dayOf = (v?: string | null) => (v ? /^(\d{4}-\d{2}-\d{2})/.exec(v)?.[1] : undefined)
+        const dateMismatch = !!(dayOf(draft?.foundAtGuess) && dayOf(hit.foundAt ?? hitIssue?.foundAt) && dayOf(draft?.foundAtGuess) !== dayOf(hit.foundAt ?? hitIssue?.foundAt))
+        const setDraftAccepted = (accepted: boolean) =>
+          setDrafts((cur) => cur.map((x) => (x.key === dupDetailKey ? { ...x, accepted } : x)))
+        return (
+          <div className="fixed inset-0 z-40 bg-black/40 flex items-center justify-center p-4" onClick={() => setDupDetailKey(null)}>
+            <div
+              className="bg-white rounded-2xl shadow-xl w-full max-w-xl max-h-[85vh] overflow-y-auto p-6 space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-[16px] font-semibold">库中已有疑似同一问题</h2>
+                  <p className="text-[12px] text-neutral-400 mt-0.5">相似度 {Math.round(hit.score * 100)}%，默认不重复录入；核对后可改选</p>
+                </div>
+                <button onClick={() => setDupDetailKey(null)} className="text-neutral-400 hover:text-neutral-600 transition-colors">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* 库中已有条目 */}
+              <div className="rounded-xl bg-neutral-50 border border-neutral-100 p-4 space-y-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[11px] text-neutral-400 shrink-0">库中</span>
+                  {hitIssue && <StatusBadge status={hitIssue.status} overdue={false} />}
+                  {hitIssue?.scope === 'reference' && (
+                    <span className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-neutral-500/10 text-neutral-500">参考</span>
+                  )}
+                </div>
+                <p className="text-[14px] font-medium leading-snug">{hit.title}</p>
+                <p className="text-[12px] text-neutral-500 whitespace-pre-wrap">{(hitIssue?.description || hit.snippet)?.slice(0, 300)}</p>
+                {hitIssue?.fixNote && <p className="text-[12px] text-[#248A3D]">整改措施:{hitIssue.fixNote}</p>}
+                <p className="text-[12px] text-neutral-400">
+                  {hit.locationName ?? '未标注车间'} · {(hit.foundAt ?? hitIssue?.foundAt ?? '').slice(0, 10) || '日期未知'} 发现
+                  {hitIssue?.sourceFile ? ` · 来源:${hitIssue.sourceFile}` : ''}
+                </p>
+              </div>
+
+              {/* 本次导入条目对比 */}
+              {draft && (
+                <div className="rounded-xl bg-[#FF9500]/6 border border-[#FF9500]/20 p-4 space-y-2">
+                  <span className="text-[11px] text-[#B25000]">本次待导入</span>
+                  <p className="text-[14px] font-medium leading-snug">{draft.title}</p>
+                  <div className="text-[12px] space-y-0.5">
+                    <p className={locMismatch ? 'text-[#B25000] font-medium' : 'text-neutral-500'}>
+                      车间：{draft.locationGuess ?? '未标注'}{locMismatch ? `（库中为 ${hit.locationName}，车间不同不算同一问题）` : ''}
+                    </p>
+                    <p className={dateMismatch ? 'text-[#B25000] font-medium' : 'text-neutral-500'}>
+                      日期：{draft.foundAtGuess?.slice(0, 10) ?? '未识别'}{dateMismatch ? `（库中为 ${(hit.foundAt ?? hitIssue?.foundAt ?? '').slice(0, 10)}，日期不同不算同一问题）` : ''}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* 人工改选 */}
+              <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                <button
+                  onClick={() => draft && setDraftAccepted(!draft.accepted)}
+                  className="text-[#007AFF]"
+                >
+                  {draft?.accepted ? <CheckSquare className="w-4.5 h-4.5" /> : <Square className="w-4.5 h-4.5 text-neutral-300" />}
+                </button>
+                <span className="text-[13px] text-neutral-600">仍要导入此问题（勾选后随本次导入入库）</span>
+              </label>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

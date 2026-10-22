@@ -36,6 +36,25 @@ export interface ReindexJob {
 type IssueRow = Awaited<ReturnType<PrismaService['issue']['findMany']>>[number]
 type IssueAnnotationRow = Awaited<ReturnType<PrismaService['issueAnnotation']['findMany']>>[number]
 
+/** 查重元数据核对：车间、日期任一明确不同 → 'diff'（不算同一问题）；缺少对应信息时不做否定判断 */
+export function dupMetaVerdict(
+  draft: { locationName?: string | null; foundAt?: string | null },
+  hit: { locationName?: string | null; foundAt?: string | Date | null },
+): 'same' | 'diff' {
+  const aLoc = (draft.locationName ?? '').trim()
+  const bLoc = (hit.locationName ?? '').trim()
+  if (aLoc && bLoc && aLoc !== bLoc) return 'diff'
+  const day = (v?: string | Date | null): string => {
+    if (!v) return ''
+    const s = typeof v === 'string' ? v : v.toISOString()
+    return /^(\d{4}-\d{2}-\d{2})/.exec(s)?.[1] ?? ''
+  }
+  const aDay = day(draft.foundAt)
+  const bDay = day(hit.foundAt)
+  if (aDay && bDay && aDay !== bDay) return 'diff'
+  return 'same'
+}
+
 // 按句/按行切分长文本为 ≤400 字的切片（50 字重叠保持上下文连贯）
 function splitText(text: string, max = 400, overlap = 50): string[] {
   if (text.length <= max) return [text]
@@ -360,14 +379,18 @@ export class KnowledgeService {
     return rows.map((r) => ({ ...r, score: Number(r.score) }))
   }
 
-  /** 向量近邻候选（仅案例库，取前 12 条切片） */
+  /** 向量近邻候选（仅案例库，取前 12 条切片）：带出隐患的车间/日期/状态供查重元数据核对 */
   private async issueCandidates(vec: number[]) {
     return this.prisma.$queryRawUnsafe<
-      { issueId: string | null; title: string; content: string; score: number }[]
+      { issueId: string | null; title: string; content: string; score: number; locationName: string | null; foundAt: Date | null; status: string | null }[]
     >(
       `SELECT d."refId" AS "issueId", d.title, c.content,
+              l.name AS "locationName", i."foundAt", i.status,
               1 - (c.embedding <=> $1::vector) AS score
-       FROM knowledge_chunks c JOIN knowledge_docs d ON d.id = c."docId"
+       FROM knowledge_chunks c
+       JOIN knowledge_docs d ON d.id = c."docId"
+       JOIN issues i ON i.id = d."refId"
+       LEFT JOIN tags l ON l.id = i."locationId"
        WHERE c.embedding IS NOT NULL AND d.kind = 'issue'
        ORDER BY c.embedding <=> $1::vector
        LIMIT 12`,
@@ -379,11 +402,11 @@ export class KnowledgeService {
   private hybridRank(
     query: string,
     vec: number[],
-    rows: { issueId: string | null; title: string; content: string; score: number }[],
+    rows: { issueId: string | null; title: string; content: string; score: number; locationName: string | null; foundAt: Date | null; status: string | null }[],
     limit: number,
   ) {
     const qBi = bigrams(query)
-    const best = new Map<string, { issueId: string; title: string; score: number; vec: number; snippet: string }>()
+    const best = new Map<string, { issueId: string; title: string; score: number; vec: number; snippet: string; locationName: string | null; foundAt: string | null; status: string | null }>()
     for (const r of rows) {
       if (!r.issueId) continue
       const vecScore = Number(r.score)
@@ -399,6 +422,9 @@ export class KnowledgeService {
           score: 0.65 * vecScore + 0.35 * lex,
           vec: vecScore,
           snippet: r.content.slice(0, 150),
+          locationName: r.locationName,
+          foundAt: r.foundAt ? r.foundAt.toISOString() : null,
+          status: r.status,
         })
       }
     }
