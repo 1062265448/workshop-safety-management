@@ -25,6 +25,8 @@ export default function IssueList() {
   /** 发现时间范围筛选（按 foundAt 日期，含边界） */
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  /** 排序：默认发现日期倒序，可切录入日期倒序 */
+  const [sortBy, setSortBy] = useState<'foundAt' | 'createdAt'>('foundAt')
   /** 列表分页：每页 20 条 */
   const [page, setPage] = useState(0)
   const PAGE_SIZE = 20
@@ -115,12 +117,16 @@ export default function IssueList() {
         // 发现时间范围：ISO 字符串前 10 位即日期，字典序比较即日期比较
         .filter((i) => !dateFrom || i.foundAt.slice(0, 10) >= dateFrom)
         .filter((i) => !dateTo || i.foundAt.slice(0, 10) <= dateTo)
-        .sort((a, b) => b.foundAt.localeCompare(a.foundAt) || b.createdAt.localeCompare(a.createdAt)),
-    [issues, q, status, categoryId, locationId, scope, reviewed, dateFrom, dateTo],
+        .sort((a, b) =>
+          sortBy === 'foundAt'
+            ? b.foundAt.localeCompare(a.foundAt) || b.createdAt.localeCompare(a.createdAt)
+            : b.createdAt.localeCompare(a.createdAt) || b.foundAt.localeCompare(a.foundAt),
+        ),
+    [issues, q, status, categoryId, locationId, scope, reviewed, dateFrom, dateTo, sortBy],
   )
 
   // 任一筛选条件变化时回到第一页
-  useEffect(() => setPage(0), [q, status, categoryId, locationId, scope, reviewed, dateFrom, dateTo])
+  useEffect(() => setPage(0), [q, status, categoryId, locationId, scope, reviewed, dateFrom, dateTo, sortBy])
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const curPage = Math.min(page, pageCount - 1)
   const pageItems = filtered.slice(curPage * PAGE_SIZE, (curPage + 1) * PAGE_SIZE)
@@ -355,6 +361,11 @@ export default function IssueList() {
             </button>
           )}
         </div>
+        {/* 排序切换：默认发现日期倒序，可切录入日期倒序 */}
+        <select className={selectCls} value={sortBy} onChange={(e) => setSortBy(e.target.value as 'foundAt' | 'createdAt')} title="列表排序方式">
+          <option value="foundAt">按发现日期</option>
+          <option value="createdAt">按录入日期</option>
+        </select>
       </div>
 
       {/* 列表 */}
