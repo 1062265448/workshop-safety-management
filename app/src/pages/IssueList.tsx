@@ -115,7 +115,7 @@ export default function IssueList() {
         // 发现时间范围：ISO 字符串前 10 位即日期，字典序比较即日期比较
         .filter((i) => !dateFrom || i.foundAt.slice(0, 10) >= dateFrom)
         .filter((i) => !dateTo || i.foundAt.slice(0, 10) <= dateTo)
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+        .sort((a, b) => b.foundAt.localeCompare(a.foundAt) || b.createdAt.localeCompare(a.createdAt)),
     [issues, q, status, categoryId, locationId, scope, reviewed, dateFrom, dateTo],
   )
 
