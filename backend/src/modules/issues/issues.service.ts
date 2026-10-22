@@ -125,6 +125,10 @@ export class IssuesService {
   async update(id: string, body: Record<string, unknown>) {
     const before = await this.prisma.issue.findUnique({ where: { id } })
     this.checkCountermeasure(body, before)
+    // 其他车间问题仅存档参考：不允许进入整改中/待复查状态（成品车间才走完整整改闭环）
+    if (before?.scope === 'reference' && (body.status === 'fixing' || body.status === 'review')) {
+      throw new BadRequestException('其他车间的问题仅作参考，不走整改/复查流程，可直接闭环')
+    }
     await this.prisma.issue.update({ where: { id }, data: pick(body) })
     // 好做法联动：标记/取消标记，或已标记条目内容变更时，同步知识库「好做法」文档
     if (before?.isGood || body.isGood !== undefined) await this.knowledge.syncGoodDoc(id)

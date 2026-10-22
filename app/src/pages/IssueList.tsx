@@ -132,6 +132,13 @@ export default function IssueList() {
   const pageItems = filtered.slice(curPage * PAGE_SIZE, (curPage + 1) * PAGE_SIZE)
 
   const transition = (issue: SafetyIssue) => {
+    // 其他车间问题仅存档参考，不走整改/复查流程：未闭环的一键直接闭环
+    if (issue.scope === 'reference') {
+      if (issue.status !== 'closed') {
+        updateIssue(issue.id, { status: 'closed', closedAt: new Date().toISOString() })
+      }
+      return
+    }
     const next = NEXT_ACTION[issue.status]
     if (!next) return
     updateIssue(issue.id, {
@@ -332,7 +339,9 @@ export default function IssueList() {
         </div>
         <select className={selectCls} value={status} onChange={(e) => setStatus(e.target.value as IssueStatus | '')}>
           <option value="">全部状态</option>
-          {(Object.keys(STATUS_LABEL) as IssueStatus[]).map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
+          {(Object.keys(STATUS_LABEL) as IssueStatus[])
+            .filter((s) => scope !== 'reference' || (s !== 'fixing' && s !== 'review'))
+            .map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
         </select>
         <select className={selectCls} value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
           <option value="">全部类型</option>
@@ -467,14 +476,24 @@ export default function IssueList() {
                   标记已复核
                 </button>
               )}
-              {/* 参考件/正面典型不进入整改闭环，不显示状态流转按钮 */}
-              {i.scope !== 'reference' && !i.isGood && NEXT_ACTION[i.status] && (
-                <button
-                  onClick={() => transition(i)}
-                  className="px-3.5 py-1.5 rounded-full bg-[#007AFF] text-white text-[12px] font-medium hover:bg-[#0066D6] transition-colors"
-                >
-                  {NEXT_ACTION[i.status]!.label}
-                </button>
+              {/* 正面典型不走整改闭环；成品车间走 整改→复查→闭环；其他车间仅参考，未闭环的可一键直接闭环（无整改/复查状态） */}
+              {!i.isGood && i.status !== 'closed' && (
+                i.scope === 'reference' ? (
+                  <button
+                    onClick={() => transition(i)}
+                    title="其他车间问题仅存档参考，不走整改/复查流程，可直接闭环"
+                    className="px-3.5 py-1.5 rounded-full bg-[#007AFF] text-white text-[12px] font-medium hover:bg-[#0066D6] transition-colors"
+                  >
+                    确认闭环
+                  </button>
+                ) : NEXT_ACTION[i.status] ? (
+                  <button
+                    onClick={() => transition(i)}
+                    className="px-3.5 py-1.5 rounded-full bg-[#007AFF] text-white text-[12px] font-medium hover:bg-[#0066D6] transition-colors"
+                  >
+                    {NEXT_ACTION[i.status]!.label}
+                  </button>
+                ) : null
               )}
               <button
                 onClick={() => confirmRemove(i)}
@@ -1101,13 +1120,23 @@ export default function IssueList() {
               >
                 {pendingDeleteId === detailIssue.id ? '确认删除' : <><Trash2 className="w-3.5 h-3.5" />删除</>}
               </button>
-              {detailIssue.scope !== 'reference' && !detailIssue.isGood && NEXT_ACTION[detailIssue.status] && (
-                <button
-                  onClick={() => transition(detailIssue)}
-                  className="px-4 py-1.5 rounded-full bg-[#007AFF] text-white text-[13px] font-medium hover:bg-[#0066D6] transition-colors"
-                >
-                  {NEXT_ACTION[detailIssue.status]!.label}
-                </button>
+              {!detailIssue.isGood && detailIssue.status !== 'closed' && (
+                detailIssue.scope === 'reference' ? (
+                  <button
+                    onClick={() => transition(detailIssue)}
+                    title="其他车间问题仅存档参考，不走整改/复查流程，可直接闭环"
+                    className="px-4 py-1.5 rounded-full bg-[#007AFF] text-white text-[13px] font-medium hover:bg-[#0066D6] transition-colors"
+                  >
+                    确认闭环
+                  </button>
+                ) : NEXT_ACTION[detailIssue.status] ? (
+                  <button
+                    onClick={() => transition(detailIssue)}
+                    className="px-4 py-1.5 rounded-full bg-[#007AFF] text-white text-[13px] font-medium hover:bg-[#0066D6] transition-colors"
+                  >
+                    {NEXT_ACTION[detailIssue.status]!.label}
+                  </button>
+                ) : null
               )}
             </div>
             )}
