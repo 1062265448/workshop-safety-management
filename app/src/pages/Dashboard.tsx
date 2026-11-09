@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router'
-import { AlertTriangle, CheckCircle2, Clock3, ListChecks, ArrowRight, RefreshCw, XCircle } from 'lucide-react'
+import { Link, useNavigate } from 'react-router'
+import { AlertTriangle, CheckCircle2, Clock3, ListChecks, ArrowRight, RefreshCw, X, XCircle } from 'lucide-react'
 import { api, isOverdue, useStore } from '@/lib/store'
 import { getCurrentUser } from '@/lib/auth'
 import { fmtDate, fmtDateTime } from '@/lib/format'
-import { RiskBadge, StatusBadge } from '@/components/badges'
+import { RiskBadge, SOURCE_LABEL, StatusBadge } from '@/components/badges'
+import type { Reminder, SafetyIssue } from '@/types'
+
+const REMINDER_TYPE_LABEL: Record<Reminder['type'], string> = { overdue: '整改超期', plan: '检查计划', review: '待复查', recheck: '防复发复查' }
 
 /** 钉钉通报导入台账记录（与后端 dingtalk_imports 表对应） */
 interface ImportRecord {
@@ -25,8 +28,24 @@ interface DingtalkStatus {
 }
 
 export default function Dashboard() {
-  const { issues: allIssues, plans, reminders } = useStore()
+  const { issues: allIssues, tags, plans, reminders } = useStore()
+  const navigate = useNavigate()
   const isAdmin = getCurrentUser()?.role === 'admin'
+
+  // ── 点击弹详情：隐患只读详情 / 提醒详情 / 照片放大 ──
+  const [detailIssue, setDetailIssue] = useState<SafetyIssue | null>(null)
+  const [reminderDetail, setReminderDetail] = useState<Reminder | null>(null)
+  const [lightbox, setLightbox] = useState<string | null>(null)
+  /** 标签显示名：子标签带父标签前缀（与问题库一致） */
+  const tagName = (id?: string) => {
+    const t = tags.find((x) => x.id === id)
+    if (!t) return undefined
+    if (t.parentId) {
+      const p = tags.find((x) => x.id === t.parentId)
+      if (p) return `${p.name}-${t.name}`
+    }
+    return t.name
+  }
 
   // ── 通报自动导入状态：进首页时拉一次，手动同步后刷新 ──
   const [dtStatus, setDtStatus] = useState<DingtalkStatus | null>(null)
@@ -96,7 +115,12 @@ export default function Dashboard() {
           </div>
           <ul className="divide-y divide-neutral-100">
             {[...issues].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 5).map((i) => (
-              <li key={i.id} className="py-2.5 flex items-center gap-3">
+              <li
+                key={i.id}
+                onClick={() => setDetailIssue(i)}
+                title="点击查看详情"
+                className="py-2.5 flex items-center gap-3 cursor-pointer hover:bg-neutral-50 -mx-2 px-2 rounded-lg transition-colors"
+              >
                 <div className="flex-1 min-w-0">
                   <div className="text-[14px] truncate">{i.title}</div>
                   <div className="text-[12px] text-neutral-400">{fmtDate(i.foundAt)}</div>
@@ -116,7 +140,12 @@ export default function Dashboard() {
           ) : (
             <ul className="divide-y divide-neutral-100">
               {unread.slice(0, 5).map((r) => (
-                <li key={r.id} className="py-2.5 flex items-center gap-3">
+                <li
+                  key={r.id}
+                  onClick={() => setReminderDetail(r)}
+                  title="点击查看详情"
+                  className="py-2.5 flex items-center gap-3 cursor-pointer hover:bg-neutral-50 -mx-2 px-2 rounded-lg transition-colors"
+                >
                   <Clock3 className="w-4 h-4 text-[#FF3B30] shrink-0" />
                   <div className="flex-1 min-w-0">
                     <div className="text-[14px] truncate">{r.title}</div>
@@ -192,6 +221,126 @@ export default function Dashboard() {
           </ul>
         )}
       </section>
+
+      {/* 提醒详情弹窗 */}
+      {reminderDetail && (() => {
+        const r = reminderDetail
+        const linkedIssue = r.type === 'plan' ? undefined : allIssues.find((i) => i.id === r.refId.split('#')[0])
+        const linkedPlan = r.type === 'plan' ? plans.find((p) => p.id === r.refId) : undefined
+        return (
+          <div className="fixed inset-0 z-40 bg-black/40 flex items-center justify-center p-4" onClick={() => setReminderDetail(null)}>
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="space-y-1.5 min-w-0">
+                  <span className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-[#FF9500]/12 text-[#B25000]">{REMINDER_TYPE_LABEL[r.type]}</span>
+                  <h2 className="text-[16px] font-semibold leading-snug">{r.title}</h2>
+                </div>
+                <button onClick={() => setReminderDetail(null)} className="p-1 text-neutral-400 hover:text-neutral-700 transition-colors shrink-0">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-[13px] text-neutral-500">触发于 {fmtDateTime(r.triggerAt)}</p>
+              {r.type !== 'plan' && linkedIssue && (
+                <button onClick={() => { setReminderDetail(null); setDetailIssue(linkedIssue) }} className="w-full text-left rounded-xl bg-neutral-50 border border-neutral-100 px-4 py-3 hover:bg-neutral-100 transition-colors">
+                  <div className="text-[12px] text-neutral-400 mb-0.5">关联隐患（点击查看详情）</div>
+                  <div className="text-[13px] font-medium truncate">{linkedIssue.title}</div>
+                </button>
+              )}
+              {r.type !== 'plan' && !linkedIssue && (
+                <p className="text-[12px] text-neutral-400">关联隐患已删除或不在当前数据中</p>
+              )}
+              {r.type === 'plan' && linkedPlan && (
+                <button onClick={() => { setReminderDetail(null); navigate('/plans') }} className="w-full text-left rounded-xl bg-neutral-50 border border-neutral-100 px-4 py-3 hover:bg-neutral-100 transition-colors">
+                  <div className="text-[12px] text-neutral-400 mb-0.5">关联检查计划（点击前往）</div>
+                  <div className="text-[13px] font-medium truncate">{linkedPlan.name}</div>
+                </button>
+              )}
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* 隐患只读详情弹窗（编辑/流转等操作去问题库） */}
+      {detailIssue && (
+        <div className="fixed inset-0 z-40 bg-black/40 flex items-center justify-center p-4" onClick={() => setDetailIssue(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-xl max-h-[85vh] overflow-y-auto p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-2 min-w-0 flex-1">
+                <h2 className="text-[18px] font-semibold leading-snug">{detailIssue.title}</h2>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {detailIssue.scope === 'reference' && (
+                    <span className="px-2 py-0.5 rounded-md text-[12px] font-medium bg-neutral-500/10 text-neutral-500">参考</span>
+                  )}
+                  {detailIssue.isGood && (
+                    <span className="px-2 py-0.5 rounded-md text-[12px] font-medium bg-[#34C759]/12 text-[#248A3D]">做得好</span>
+                  )}
+                  <RiskBadge level={detailIssue.riskLevel} />
+                  <StatusBadge status={detailIssue.status} overdue={isOverdue(detailIssue)} />
+                  {detailIssue.reviewed === false && (
+                    <span className="px-2 py-0.5 rounded-md text-[12px] font-medium bg-[#FF9500]/12 text-[#B25000]">人工未复核</span>
+                  )}
+                </div>
+              </div>
+              <button onClick={() => setDetailIssue(null)} className="p-1 text-neutral-400 hover:text-neutral-700 transition-colors shrink-0">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5 text-[13px]">
+              <div><dt className="text-neutral-400 text-[12px]">发现时间</dt><dd className="mt-0.5">{fmtDateTime(detailIssue.foundAt)}</dd></div>
+              <div><dt className="text-neutral-400 text-[12px]">录入时间</dt><dd className="mt-0.5">{fmtDateTime(detailIssue.createdAt)}</dd></div>
+              <div><dt className="text-neutral-400 text-[12px]">整改期限</dt><dd className="mt-0.5">{detailIssue.deadline ? fmtDate(detailIssue.deadline) : '—'}</dd></div>
+              <div><dt className="text-neutral-400 text-[12px]">闭环时间</dt><dd className="mt-0.5">{detailIssue.closedAt ? fmtDateTime(detailIssue.closedAt) : '—'}</dd></div>
+              <div><dt className="text-neutral-400 text-[12px]">区域</dt><dd className="mt-0.5">{tagName(detailIssue.locationId) ?? '—'}</dd></div>
+              <div><dt className="text-neutral-400 text-[12px]">类型</dt><dd className="mt-0.5">{tagName(detailIssue.categoryId) ?? '—'}</dd></div>
+              <div><dt className="text-neutral-400 text-[12px]">排查人</dt><dd className="mt-0.5">{detailIssue.reporter || '—'}</dd></div>
+              <div><dt className="text-neutral-400 text-[12px]">责任人</dt><dd className="mt-0.5">{detailIssue.assignee || '—'}</dd></div>
+              <div className="col-span-2"><dt className="text-neutral-400 text-[12px]">来源</dt><dd className="mt-0.5">{detailIssue.sourceFile || SOURCE_LABEL[detailIssue.source] || detailIssue.source}</dd></div>
+            </dl>
+
+            {detailIssue.description && (
+              <div>
+                <div className="text-[12px] text-neutral-400 mb-1">问题描述</div>
+                <p className="text-[13px] text-neutral-700 leading-relaxed whitespace-pre-wrap">{detailIssue.description}</p>
+              </div>
+            )}
+            {detailIssue.fixNote && (
+              <div className="rounded-xl bg-[#34C759]/8 border border-[#34C759]/15 p-3.5">
+                <div className="text-[12px] text-[#248A3D] font-medium mb-1">整改记录</div>
+                <p className="text-[13px] text-neutral-600 leading-relaxed">{detailIssue.fixNote}</p>
+              </div>
+            )}
+            {(detailIssue.photos?.length ?? 0) > 0 && (
+              <div>
+                <div className="text-[12px] text-neutral-400 mb-1.5">照片（{detailIssue.photos!.length}）</div>
+                <div className="flex gap-1.5 flex-wrap">
+                  {detailIssue.photos!.map((p) => (
+                    <button key={p} onClick={() => setLightbox(p)} className="w-16 h-16 rounded-lg overflow-hidden bg-neutral-100 shrink-0">
+                      <img src={p} alt="" className="w-full h-full object-cover" loading="lazy" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <span className="text-[12px] text-neutral-400 mr-auto">此处为只读预览，修改与流转请在问题库操作</span>
+              <button
+                onClick={() => navigate('/issues')}
+                className="px-4 py-1.5 rounded-full bg-[#007AFF] text-white text-[13px] font-medium hover:bg-[#0066D6] transition-colors"
+              >
+                去问题库处理
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 照片放大 */}
+      {lightbox && (
+        <div className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4" onClick={() => setLightbox(null)}>
+          <img src={lightbox} alt="" className="max-w-full max-h-full object-contain" onClick={(e) => e.stopPropagation()} />
+        </div>
+      )}
     </div>
   )
 }
