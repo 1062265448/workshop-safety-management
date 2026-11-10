@@ -1,5 +1,6 @@
 "use client"
 
+/* eslint-disable react-refresh/only-export-components -- 侧栏组件与配套 hook 作为同一公共模块导出。 */
 import * as React from "react"
 import { Slot } from "@radix-ui/react-slot"
 import { cva, type VariantProps } from "class-variance-authority"
@@ -606,10 +607,8 @@ function SidebarMenuSkeleton({
 }: React.ComponentProps<"div"> & {
   showIcon?: boolean
 }) {
-  // Random width between 50 to 90%.
-  const width = React.useMemo(() => {
-    return `${Math.floor(Math.random() * 40) + 50}%`
-  }, [])
+  // 固定骨架宽度，避免渲染期间使用随机数导致输出不稳定。
+  const width = "70%"
 
   return (
     <div

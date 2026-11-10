@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- 页面与列表页共用的标注徽标配置集中导出。 */
 import { useMemo, useState } from 'react'
 import { Flag, Loader2, Check } from 'lucide-react'
 import { useStore } from '@/lib/store'
@@ -113,7 +114,7 @@ function AnnotationCard({
   annotation?: IssueAnnotation
   categories: Tag[]
   tagById: Map<string, Tag>
-  onSave: (body: { relevance: string; similarity: string; caution: string; tagId: string | null }) => void
+  onSave: (body: { relevance: string; similarity: string; caution: string; tagId: string | null }) => Promise<unknown>
   onClear: () => void
 }) {
   const [relevance, setRelevance] = useState<RelevanceLevel>(annotation?.relevance ?? 'medium')
@@ -122,6 +123,7 @@ function AnnotationCard({
   const [tagId, setTagId] = useState(annotation?.tagId ?? '')
   const [saving, setSaving] = useState(false)
   const [savedTick, setSavedTick] = useState(false)
+  const [saveError, setSaveError] = useState('')
 
   const dirty =
     relevance !== (annotation?.relevance ?? 'medium') ||
@@ -129,12 +131,20 @@ function AnnotationCard({
     caution !== (annotation?.caution ?? '') ||
     tagId !== (annotation?.tagId ?? '')
 
-  const save = () => {
+  const save = async () => {
     if (saving) return
     setSaving(true)
-    onSave({ relevance, similarity, caution, tagId: tagId || null })
-    // store 失败会置 offline 提示条；本地给一个短暂的"已保存"反馈
-    setTimeout(() => { setSaving(false); setSavedTick(true); setTimeout(() => setSavedTick(false), 1600) }, 350)
+    setSavedTick(false)
+    setSaveError('')
+    try {
+      await onSave({ relevance, similarity, caution, tagId: tagId || null })
+      setSavedTick(true)
+      setTimeout(() => setSavedTick(false), 1600)
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : '保存失败，请重试')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const inputCls = 'w-full px-3 py-2 rounded-lg bg-neutral-100/80 text-[13px] outline-none focus:ring-2 ring-[#007AFF]/30'
@@ -227,6 +237,7 @@ function AnnotationCard({
           placeholder="需要严格注意：对照排查要点、易忽视环节…"
         />
 
+        {saveError && <p className="text-[12px] text-[#D70015]">{saveError}</p>}
         <div className="flex items-center justify-end gap-3">
           {annotation && (
             <button onClick={onClear} className="text-[12px] text-neutral-400 hover:text-[#D70015] transition-colors">

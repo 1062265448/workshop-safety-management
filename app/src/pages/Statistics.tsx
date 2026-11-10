@@ -6,12 +6,38 @@ import {
 } from 'recharts'
 import { api, useStore } from '@/lib/store'
 import { fmtDate } from '@/lib/format'
-import { RISK_COLOR, RISK_LABEL } from '@/components/badges'
-import type { Assessment, RiskLevel } from '@/types'
+import type { Assessment } from '@/types'
 
 type Period = 'week' | 'month' | 'quarter'
+type Scope = 'managed' | 'reference' | 'all'
+type RiskKey = 'general' | 'major' | 'critical' | 'immediate'
+
+interface SafetyMetrics {
+  total: number
+  closed: number
+  discoveredClosureRate: number | null
+  dueTotal: number
+  dueClosedOnTime: number
+  dueClosureRate: number | null
+  overdue: number
+  byRiskLevel: Record<string, number>
+}
+
 const PERIOD_DAYS: Record<Period, number> = { week: 7, month: 30, quarter: 90 }
 const PERIOD_LABEL: Record<Period, string> = { week: '近 7 天', month: '近 30 天', quarter: '近 90 天' }
+const RISK_META: Record<RiskKey, { label: string; color: string }> = {
+  general: { label: '一般', color: '#34C759' },
+  major: { label: '较大', color: '#FF9500' },
+  critical: { label: '重大', color: '#FF3B30' },
+  immediate: { label: '即知即改', color: '#007AFF' },
+}
+const RISK_LEVELS = Object.keys(RISK_META) as RiskKey[]
+// 本地趋势使用进入页面时的时间快照，避免每次渲染生成不同的日期边界。
+const STATS_SNAPSHOT_AT = Date.now()
+
+function formatRate(rate: number | null, hasDenominator: boolean): string {
+  return hasDenominator && rate !== null ? `${rate}%` : '—'
+}
 
 /** 考核周期：当月10日 06:00 ~ 次月10日 06:00（日期 >= 10 算本月起，否则上月10日起）；offset 前后翻周期 */
 function assessmentMonth(offset = 0): string {
@@ -32,7 +58,41 @@ export default function Statistics() {
   const { issues: allIssues, tags } = useStore()
   const [period, setPeriod] = useState<Period>('month')
   /** 统计范围：成品车间（闭环管理）/ 其他车间（厂督察重点参考）/ 全部 */
-  const [scope, setScope] = useState<'' | 'managed' | 'reference'>('managed')
+  const [scope, setScope] = useState<Scope>('managed')
+  const days = PERIOD_DAYS[period]
+
+  // 顶部指标与风险构成只采用后端口径；请求切换期间不展示上一组数据。
+  const [metricsRetry, setMetricsRetry] = useState(0)
+  const [metricsState, setMetricsState] = useState<{
+    days: number
+    scope: Scope
+    retry: number
+    data: SafetyMetrics | null
+    error: string | null
+  }>({ days: 0, scope, retry: -1, data: null, error: null })
+  const metricsLoading = metricsState.days !== days || metricsState.scope !== scope || metricsState.retry !== metricsRetry
+  const metrics = metricsLoading ? null : metricsState.data
+  const metricsError = metricsLoading ? null : metricsState.error
+
+  useEffect(() => {
+    const controller = new AbortController()
+    api<SafetyMetrics>(`/metrics/safety?days=${days}&scope=${scope}`, { signal: controller.signal })
+      .then((data) => {
+        if (!controller.signal.aborted) setMetricsState({ days, scope, retry: metricsRetry, data, error: null })
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          setMetricsState({
+            days,
+            scope,
+            retry: metricsRetry,
+            data: null,
+            error: error instanceof Error ? error.message : '未知错误',
+          })
+        }
+      })
+    return () => controller.abort()
+  }, [days, metricsRetry, scope])
 
   // ── 本月考核：周期 = 当月10日 ~ 次月10日，可前后翻周期 ──
   const [asmOffset, setAsmOffset] = useState(0)
@@ -66,10 +126,9 @@ export default function Statistics() {
   }, [allIssues])
 
   const data = useMemo(() => {
-    // 统计范围：默认仅成品车间（managed）；可选其他车间参考件，用于观察厂督察检查重点
-    const issues = allIssues.filter((i) => !scope || i.scope === scope)
-    const days = PERIOD_DAYS[period]
-    const since = Date.now() - days * 86_400_000
+    // 趋势、类型和区域图继续使用当前台账本地计算。
+    const issues = allIssues.filter((i) => scope === 'all' || i.scope === scope)
+    const since = STATS_SNAPSHOT_AT - days * 86_400_000
     const inPeriod = issues.filter((i) => new Date(i.foundAt).getTime() >= since)
 
     // 新增趋势（按天）
@@ -96,18 +155,8 @@ export default function Statistics() {
       .filter((x) => x.数量 > 0)
       .sort((a, b) => b.数量 - a.数量)
 
-    // 风险等级
-    const byRisk = (['immediate', 'general', 'critical'] as RiskLevel[]).map((r) => ({
-      name: RISK_LABEL[r], value: inPeriod.filter((i) => i.riskLevel === r).length,
-    }))
-
-    // 闭环率：期内闭环 / 期内到期应整改（参考件无整改期限，闭环率无意义，显示 —）
-    const due = issues.filter((i) => i.deadline && new Date(i.deadline).getTime() >= since)
-    const closedInPeriod = issues.filter((i) => i.closedAt && new Date(i.closedAt).getTime() >= since)
-    const closeRate = scope === 'reference' ? null : (due.length ? Math.round((due.filter((i) => i.status === 'closed').length / due.length) * 100) : 100)
-
-    return { trend, byCategory, byLocation, byRisk, total: inPeriod.length, closed: closedInPeriod.length, closeRate }
-  }, [allIssues, tags, period, scope])
+    return { trend, byCategory, byLocation }
+  }, [allIssues, days, scope, tags])
 
   const card = 'bg-white rounded-2xl p-5 shadow-sm'
 
@@ -117,9 +166,20 @@ export default function Statistics() {
         <div className="flex items-end justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-semibold">周期统计</h1>
-            <p className="text-sm text-neutral-500 mt-1">
-              新增 {data.total} 条 · 闭环 {data.closed} 条{data.closeRate !== null && ` · 按期闭环率 ${data.closeRate}%`}
-            </p>
+            {metricsLoading ? (
+              <p className="text-sm text-neutral-500 mt-1" role="status">正在加载安全指标…</p>
+            ) : metrics ? (
+              <div className="mt-1 space-y-0.5">
+                <p className="text-sm text-neutral-500">
+                  新增 {metrics.total} 条 · 闭环 {metrics.closed} 条 · 发现闭环率 {formatRate(metrics.discoveredClosureRate, metrics.total > 0)} · 按期闭环率 {formatRate(metrics.dueClosureRate, metrics.dueTotal > 0)}
+                </p>
+                <p className="text-[12px] text-neutral-400">
+                  期内到期 {metrics.dueTotal} 条 · 按期闭环 {metrics.dueClosedOnTime} 条 · 当前逾期 {metrics.overdue} 条
+                </p>
+              </div>
+            ) : (
+              <p className="text-sm text-[#D70015] mt-1">安全指标加载失败</p>
+            )}
           </div>
           <div className="flex gap-1 bg-neutral-200/60 p-1 rounded-xl">
             {(Object.keys(PERIOD_LABEL) as Period[]).map((p) => (
@@ -135,7 +195,7 @@ export default function Statistics() {
         </div>
         {/* 统计范围：其他车间参考件的趋势即厂督察近期检查重点 */}
         <div className="flex gap-1 bg-neutral-200/60 p-1 rounded-xl w-fit">
-          {([['managed', '成品车间'], ['reference', '其他车间'], ['', '全部']] as const).map(([key, label]) => (
+          {([['managed', '成品车间'], ['reference', '其他车间'], ['all', '全部']] as const).map(([key, label]) => (
             <button
               key={key}
               onClick={() => setScope(key)}
@@ -145,6 +205,17 @@ export default function Statistics() {
             </button>
           ))}
         </div>
+        {metricsError && (
+          <div className="flex items-center justify-between gap-3 rounded-xl bg-[#FF3B30]/10 px-4 py-3 text-[13px] text-[#D70015]" role="alert">
+            <span>指标接口请求失败：{metricsError}。未使用本地数据替代顶部指标或风险构成。</span>
+            <button
+              onClick={() => setMetricsRetry((value) => value + 1)}
+              className="shrink-0 rounded-lg bg-white px-3 py-1.5 font-medium shadow-sm"
+            >
+              重试
+            </button>
+          </div>
+        )}
       </header>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -299,29 +370,36 @@ export default function Statistics() {
           )}
         </section>
 
-        {/* 风险等级 */}
+        {/* 风险等级：与顶部指标共用接口结果，固定展示全部四个等级 */}
         <section className={card}>
           <h2 className="text-[15px] font-semibold mb-3">风险等级构成</h2>
-          <ul className="space-y-2.5">
-            {data.byRisk.map((r, idx) => {
-              const total = Math.max(1, data.total)
-              const key = (['immediate', 'general', 'critical'] as RiskLevel[])[idx]
-              return (
-                <li key={r.name}>
-                  <div className="flex justify-between text-[13px] mb-1">
-                    <span className="text-neutral-600">{r.name}隐患</span>
-                    <span className="tabular-nums text-neutral-400">{r.value}</span>
-                  </div>
-                  <div className="h-1.5 rounded-full bg-neutral-100 overflow-hidden">
-                    <div
-                      className={`h-full rounded-full ${RISK_COLOR[key].split(' ')[0].replace('/12', '')}`}
-                      style={{ width: `${(r.value / total) * 100}%`, backgroundColor: ['#007AFF', '#34C759', '#FF3B30'][idx] }}
-                    />
-                  </div>
-                </li>
-              )
-            })}
-          </ul>
+          {metricsLoading ? (
+            <p className="text-[13px] text-neutral-400 py-8 text-center" role="status">正在加载风险构成…</p>
+          ) : metrics ? (
+            <ul className="space-y-2.5">
+              {RISK_LEVELS.map((key) => {
+                const meta = RISK_META[key]
+                const value = metrics.byRiskLevel[key] ?? 0
+                const width = metrics.total > 0 ? (value / metrics.total) * 100 : 0
+                return (
+                  <li key={key}>
+                    <div className="flex justify-between text-[13px] mb-1">
+                      <span className="text-neutral-600">{meta.label}隐患</span>
+                      <span className="tabular-nums text-neutral-400">{value}</span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-neutral-100 overflow-hidden">
+                      <div
+                        className="h-full rounded-full"
+                        style={{ width: `${width}%`, backgroundColor: meta.color }}
+                      />
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          ) : (
+            <p className="text-[13px] text-neutral-400 py-8 text-center">指标加载失败，暂无风险构成数据</p>
+          )}
         </section>
       </div>
     </div>

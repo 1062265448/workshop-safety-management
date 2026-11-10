@@ -1,5 +1,11 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common'
+import { Body, Controller, Delete, Get, GoneException, Param, Patch, Post, Query, Request } from '@nestjs/common'
 import { IssuesService } from './issues.service'
+
+type Req = { user?: { sub?: string }; headers?: Record<string, unknown> }
+const context = (req: Req) => ({
+  actor: req.user?.sub || 'system',
+  requestId: typeof req.headers?.['x-request-id'] === 'string' ? req.headers['x-request-id'] as string : null,
+})
 
 @Controller('issues')
 export class IssuesController {
@@ -17,68 +23,78 @@ export class IssuesController {
   }
 
   @Get('knowledge-docs')
-  knowledgeDocs() {
-    return this.svc.knowledgeDocs()
-  }
+  knowledgeDocs() { return this.svc.knowledgeDocs() }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.svc.findOne(id)
-  }
+  findOne(@Param('id') id: string) { return this.svc.findOne(id) }
 
   @Post()
-  create(@Body() body: Record<string, unknown>) {
-    return this.svc.create(body)
-  }
+  create(@Body() body: Record<string, unknown>, @Request() req: Req) { return this.svc.create(body, context(req)) }
 
   @Post('batch')
-  createBatch(@Body() body: { items: Record<string, unknown>[] }) {
-    return this.svc.createBatch(body.items ?? [])
+  createBatch() { throw new GoneException('旧批量接口已停用，请使用 /api/imports/batches 并提供 idempotencyKey') }
+
+  @Post(':id/status')
+  updateStatus(@Param('id') id: string, @Body() body: { status?: string }, @Request() req: Req) {
+    return this.svc.updateStatus(id, body?.status, context(req))
   }
+
+  @Post(':id/close')
+  close(@Param('id') id: string, @Body() body: { fixNote?: string; photos?: string[]; closedAt?: string }, @Request() req: Req) {
+    return this.svc.close(id, body ?? {}, context(req))
+  }
+
+  @Post(':id/evidence-corrections')
+  correctEvidence(
+    @Param('id') id: string,
+    @Body() body: { fixNote?: string; photos?: string[]; reason?: string },
+    @Request() req: Req,
+  ) {
+    return this.svc.correctEvidence(id, body ?? {}, context(req))
+  }
+
+  @Post(':id/reviewed')
+  markReviewed(@Param('id') id: string, @Request() req: Req) { return this.svc.markReviewed(id, context(req)) }
 
   @Post(':id/recheck')
-  recheck(@Param('id') id: string, @Body() body?: { failed?: boolean }) {
-    return this.svc.recheck(id, body?.failed === true)
+  recheck(
+    @Param('id') id: string,
+    @Body() body: { failed?: boolean; note?: string; photos?: string[]; checkedAt?: string },
+    @Request() req: Req,
+  ) {
+    return this.svc.recheck(id, body ?? {}, context(req))
   }
 
-  /** 整改闭环阶段推进：完成当前阶段（制度沉淀阶段可带制度要点与知识库条目） */
   @Post(':id/stage/next')
-  advanceStage(@Param('id') id: string, @Body() body?: { note?: string; linkedKnowledgeDocId?: string }) {
-    return this.svc.advanceStage(id, body ?? {})
+  advanceStage(
+    @Param('id') id: string,
+    @Body() body: { note?: string; linkedKnowledgeDocId?: string },
+    @Request() req: Req,
+  ) {
+    return this.svc.advanceStage(id, body ?? {}, context(req))
   }
 
-  /** 回收站恢复 */
   @Post(':id/restore')
-  restore(@Param('id') id: string) {
-    return this.svc.restore(id)
-  }
+  restore(@Param('id') id: string, @Request() req: Req) { return this.svc.restore(id, context(req)) }
 
-  /** 关联法规依据（幂等） */
   @Post(':id/regulations')
-  linkRegulation(@Param('id') id: string, @Body() body: { regulationId?: string }) {
-    return this.svc.linkRegulation(id, body?.regulationId)
+  linkRegulation(@Param('id') id: string, @Body() body: { regulationId?: string }, @Request() req: Req) {
+    return this.svc.linkRegulation(id, body?.regulationId, context(req))
   }
 
-  /** 取消法规依据关联 */
   @Delete(':id/regulations/:rid')
-  unlinkRegulation(@Param('id') id: string, @Param('rid') rid: string) {
-    return this.svc.unlinkRegulation(id, rid)
+  unlinkRegulation(@Param('id') id: string, @Param('rid') rid: string, @Request() req: Req) {
+    return this.svc.unlinkRegulation(id, rid, context(req))
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() body: Record<string, unknown>) {
-    return this.svc.update(id, body)
+  update(@Param('id') id: string, @Body() body: Record<string, unknown>, @Request() req: Req) {
+    return this.svc.update(id, body, context(req))
   }
 
-  /** 软删除：进回收站，可恢复 */
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.svc.remove(id)
-  }
+  remove(@Param('id') id: string, @Request() req: Req) { return this.svc.remove(id, context(req)) }
 
-  /** 彻底删除：仅回收站中的条目，不可恢复 */
   @Delete(':id/hard')
-  hardRemove(@Param('id') id: string) {
-    return this.svc.hardRemove(id)
-  }
+  hardRemove(@Param('id') id: string, @Request() req: Req) { return this.svc.hardRemove(id, context(req)) }
 }

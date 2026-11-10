@@ -28,8 +28,8 @@ FROM node:20-alpine
 ENV NODE_ENV=production
 WORKDIR /app/backend
 
-# Prisma 引擎运行依赖 OpenSSL（alpine 精简镜像默认不带）
-RUN apk add --no-cache openssl libc6-compat
+# Prisma 引擎运行依赖 OpenSSL；postgresql-client 提供 Linux 备份所需 pg_dump/pg_restore
+RUN apk add --no-cache openssl libc6-compat postgresql-client
 
 # 后端运行所需：dist 产物、全部依赖（含 prisma CLI 用于启动时 migrate deploy）、迁移脚本
 COPY --from=backend-build /build/backend/node_modules ./node_modules
@@ -44,8 +44,8 @@ COPY backend/models ./models
 # __dirname = /app/backend/dist → 解析为 /app/app/dist，此布局不可改动
 COPY --from=app-build /build/app/dist /app/app/dist
 
-# 上传的照片落盘在 process.cwd()/uploads = /app/backend/uploads（compose 挂载卷持久化）
-RUN mkdir -p /app/backend/uploads
+# 上传照片与数据库/uploads 备份均使用命名卷持久化
+RUN mkdir -p /app/backend/uploads /app/backups
 
 EXPOSE 3100
 # 启动时自动执行数据库迁移，然后启动服务

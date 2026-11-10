@@ -15,7 +15,7 @@ const NEXT_ACTION: Partial<Record<IssueStatus, { label: string; to: IssueStatus 
 }
 
 export default function IssueList() {
-  const { issues, tags, annotations, updateIssue, removeIssue, recheckIssue, advanceStage, fetchBin, restoreIssue, hardDeleteIssue, linkRegulation, unlinkRegulation } = useStore()
+  const { issues, tags, annotations, updateIssue, transitionIssue, closeIssue, reviewIssue, removeIssue, recheckIssue, advanceStage, fetchBin, restoreIssue, hardDeleteIssue, linkRegulation, unlinkRegulation } = useStore()
   const [q, setQ] = useState('')
   const [status, setStatus] = useState<IssueStatus | ''>('')
   const [categoryId, setCategoryId] = useState('')
@@ -29,6 +29,8 @@ export default function IssueList() {
   const [sortBy, setSortBy] = useState<'foundAt' | 'createdAt'>('foundAt')
   /** 列表分页：每页 20 条 */
   const [page, setPage] = useState(0)
+  const [actionError, setActionError] = useState('')
+  const [recheckSubmitting, setRecheckSubmitting] = useState(false)
   const PAGE_SIZE = 20
   /** 回收站弹窗 */
   const [binOpen, setBinOpen] = useState(false)
@@ -131,27 +133,51 @@ export default function IssueList() {
   const curPage = Math.min(page, pageCount - 1)
   const pageItems = filtered.slice(curPage * PAGE_SIZE, (curPage + 1) * PAGE_SIZE)
 
-  const transition = (issue: SafetyIssue) => {
+  /** 所有操作都在此处接住异常并展示后端原因，事件处理器不会产生未处理 rejection */
+  const runAction = async (operation: () => Promise<unknown>): Promise<boolean> => {
+    setActionError('')
+    try {
+      await operation()
+      return true
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '操作失败，请重试')
+      return false
+    }
+  }
+
+  const completeRecheck = async (issue: SafetyIssue) => {
+    if (recheckSubmitting) return
+    setRecheckSubmitting(true)
+    try {
+      await runAction(() => recheckIssue(issue.id))
+    } finally {
+      setRecheckSubmitting(false)
+    }
+  }
+
+  const transition = async (issue: SafetyIssue) => {
     // 其他车间问题仅存档参考，不走整改/复查流程：未闭环的一键直接闭环
     if (issue.scope === 'reference') {
-      if (issue.status !== 'closed') {
-        updateIssue(issue.id, { status: 'closed', closedAt: new Date().toISOString() })
-      }
+      if (issue.status !== 'closed') await runAction(() => closeIssue(issue.id, { closedAt: new Date().toISOString() }))
       return
     }
     const next = NEXT_ACTION[issue.status]
     if (!next) return
-    updateIssue(issue.id, {
-      status: next.to,
-      closedAt: next.to === 'closed' ? new Date().toISOString() : issue.closedAt,
-    })
+    await runAction(() => next.to === 'closed'
+      ? closeIssue(issue.id, { closedAt: new Date().toISOString() })
+      : transitionIssue(issue.id, next.to))
   }
 
-  const confirmRemove = (issue: SafetyIssue) => {
+  const review = async (issue: SafetyIssue) => {
+    await runAction(() => reviewIssue(issue.id))
+  }
+
+  const confirmRemove = async (issue: SafetyIssue) => {
     if (pendingDeleteId === issue.id) {
-      removeIssue(issue.id)
-      setPendingDeleteId(null)
-      setDetailId((cur) => (cur === issue.id ? null : cur))
+      if (await runAction(() => removeIssue(issue.id))) {
+        setPendingDeleteId(null)
+        setDetailId((cur) => (cur === issue.id ? null : cur))
+      }
     } else {
       setPendingDeleteId(issue.id)
       // 3 秒未确认自动复位
@@ -163,17 +189,20 @@ export default function IssueList() {
   const addPhotosTo = async (issueId: string, files: File[]) => {
     const issue = issues.find((i) => i.id === issueId)
     if (!issue || !files.length) return
-    const paths = await uploadPhotos(files)
-    updateIssue(issueId, { photos: [...(issue.photos ?? []), ...paths].slice(0, 9) })
+    await runAction(async () => {
+      const paths = await uploadPhotos(files)
+      await updateIssue(issueId, { photos: [...(issue.photos ?? []), ...paths].slice(0, 9) })
+    })
   }
 
   /** 删除单张照片（两段式确认） */
-  const confirmRemovePhoto = (issue: SafetyIssue, path: string) => {
+  const confirmRemovePhoto = async (issue: SafetyIssue, path: string) => {
     if (pendingPhotoDelete === path) {
       const next = issue.photos.filter((p) => p !== path)
-      updateIssue(issue.id, { photos: next })
-      setPendingPhotoDelete(null)
-      setLightbox((cur) => (cur && next.length === 0 ? null : cur ? { ...cur, index: Math.min(cur.index, Math.max(next.length - 1, 0)) } : cur))
+      if (await runAction(() => updateIssue(issue.id, { photos: next }))) {
+        setPendingPhotoDelete(null)
+        setLightbox((cur) => (cur && next.length === 0 ? null : cur ? { ...cur, index: Math.min(cur.index, Math.max(next.length - 1, 0)) } : cur))
+      }
     } else {
       setPendingPhotoDelete(path)
       setTimeout(() => setPendingPhotoDelete((cur) => (cur === path ? null : cur)), 3000)
@@ -207,9 +236,9 @@ export default function IssueList() {
   }
 
   /** 保存编辑：留空的可选字段发 null 让后端清空（pick 只跳过 undefined，null 会落库为 NULL） */
-  const saveEdit = () => {
+  const saveEdit = async () => {
     if (!detailIssue || !editForm.title.trim() || editReasonMissing) return
-    updateIssue(detailIssue.id, {
+    const saved = await runAction(() => updateIssue(detailIssue.id, {
       title: editForm.title.trim(),
       description: editForm.description.trim(),
       categoryId: (editForm.categoryId || null) as SafetyIssue['categoryId'],
@@ -226,8 +255,8 @@ export default function IssueList() {
       causeType: (editForm.causeType || null) as SafetyIssue['causeType'],
       countermeasureLevel: (editForm.causeType === 'system' && editForm.countermeasureLevel ? editForm.countermeasureLevel : null) as SafetyIssue['countermeasureLevel'],
       countermeasureReason: (editForm.countermeasureReason.trim() || null) as SafetyIssue['countermeasureReason'],
-    })
-    setEditing(false)
+    }))
+    if (saved) setEditing(false)
   }
 
   const closeDetail = () => { setDetailId(null); setEditing(false) }
@@ -263,10 +292,10 @@ export default function IssueList() {
   }, [regQ, editing, detailId])
 
   /** 保存复查间隔（失焦时，值有变化才提交） */
-  const saveInterval = () => {
+  const saveInterval = async () => {
     if (!detailIssue) return
     const v = Math.max(1, Math.round(Number(intervalDraft) || 7))
-    if (v !== detailIssue.recheckIntervalDays) updateIssue(detailIssue.id, { recheckIntervalDays: v })
+    if (v !== detailIssue.recheckIntervalDays) await runAction(() => updateIssue(detailIssue.id, { recheckIntervalDays: v }))
     setIntervalDraft(String(v))
   }
 
@@ -275,23 +304,23 @@ export default function IssueList() {
     setBinOpen(true)
     setBinLoading(true)
     try {
-      setBinItems(await fetchBin())
+      await runAction(async () => setBinItems(await fetchBin()))
     } finally {
       setBinLoading(false)
     }
   }
 
   const handleRestore = async (id: string) => {
-    restoreIssue(id)
-    setBinItems((cur) => cur.filter((i) => i.id !== id))
+    if (await runAction(() => restoreIssue(id))) setBinItems((cur) => cur.filter((i) => i.id !== id))
   }
 
   /** 彻底删除（两段式确认，不可恢复） */
-  const confirmHardDelete = (issue: SafetyIssue) => {
+  const confirmHardDelete = async (issue: SafetyIssue) => {
     if (pendingHardDeleteId === issue.id) {
-      hardDeleteIssue(issue.id)
-      setBinItems((cur) => cur.filter((i) => i.id !== issue.id))
-      setPendingHardDeleteId(null)
+      if (await runAction(() => hardDeleteIssue(issue.id))) {
+        setBinItems((cur) => cur.filter((i) => i.id !== issue.id))
+        setPendingHardDeleteId(null)
+      }
     } else {
       setPendingHardDeleteId(issue.id)
       setTimeout(() => setPendingHardDeleteId((cur) => (cur === issue.id ? null : cur)), 3000)
@@ -308,6 +337,8 @@ export default function IssueList() {
           全部隐患记录 · 共 {issues.length} 条{filtered.length !== issues.length && `（筛选后 ${filtered.length} 条）`}
         </p>
       </header>
+
+      {actionError && <div className="px-4 py-2.5 rounded-xl bg-[#FF3B30]/10 text-[#D70015] text-[13px]">{actionError}</div>}
 
       {/* 范围页签：成品车间（闭环管理）/ 其他车间（参考） */}
       <div className="flex items-center gap-3 flex-wrap">
@@ -468,7 +499,7 @@ export default function IssueList() {
             <div className="flex items-center gap-2 shrink-0">
               {i.reviewed === false && (
                 <button
-                  onClick={() => updateIssue(i.id, { reviewed: true })}
+                  onClick={() => review(i)}
                   title="人工复核无误后标记"
                   className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-[#FF9500]/12 text-[#B25000] text-[12px] font-medium hover:bg-[#FF9500]/25 transition-colors"
                 >
@@ -573,7 +604,7 @@ export default function IssueList() {
                   <RiskBadge level={detailIssue.riskLevel} />
                   {detailIssue.reviewed === false && (
                     <button
-                      onClick={() => updateIssue(detailIssue.id, { reviewed: true })}
+                      onClick={() => review(detailIssue)}
                       title="批量识别导入，人工复核无误后点击标记"
                       className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[12px] font-medium bg-[#FF9500]/12 text-[#B25000] hover:bg-[#FF9500]/25 transition-colors"
                     >
@@ -589,6 +620,12 @@ export default function IssueList() {
                 <X className="w-5 h-5" />
               </button>
             </div>
+
+            {actionError && (
+              <div role="alert" className="rounded-xl border border-[#FF3B30]/20 bg-[#FF3B30]/10 px-4 py-3 text-[13px] leading-relaxed text-[#D70015]">
+                {actionError}
+              </div>
+            )}
 
             {/* 完整描述 */}
             {editing ? (
@@ -821,7 +858,7 @@ export default function IssueList() {
                         </div>
                         {editing && (
                           <button
-                            onClick={() => unlinkRegulation(detailIssue.id, r.id)}
+                            onClick={() => runAction(() => unlinkRegulation(detailIssue.id, r.id))}
                             title="移除该法规依据"
                             className="shrink-0 p-1 text-neutral-300 hover:text-[#FF3B30] transition-colors"
                           >
@@ -856,7 +893,7 @@ export default function IssueList() {
                             <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${meta.cls}`}>{meta.label}</span>
                             <span className="flex-1 min-w-0 truncate text-[13px] text-neutral-700">{r.title}</span>
                             <button
-                              onClick={() => linkRegulation(detailIssue.id, r.id)}
+                              onClick={() => runAction(() => linkRegulation(detailIssue.id, r.id))}
                               className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#007AFF]/10 text-[#007AFF] text-[12px] font-medium hover:bg-[#007AFF]/18 transition-colors"
                             >
                               <Plus className="w-3 h-3" />
@@ -911,7 +948,7 @@ export default function IssueList() {
                       {knowledgeDocs.map((d) => <option key={d.id} value={d.id}>{d.title}</option>)}
                     </select>
                     <button
-                      onClick={() => advanceStage(detailIssue.id, { note: institutionDraft.note, linkedKnowledgeDocId: institutionDraft.docId || undefined })}
+                      onClick={() => runAction(() => advanceStage(detailIssue.id, { note: institutionDraft.note, linkedKnowledgeDocId: institutionDraft.docId || undefined }))}
                       className="px-4 py-1.5 rounded-full bg-[#007AFF] text-white text-[12px] font-medium hover:bg-[#0066D6] transition-colors"
                     >
                       完成本阶段（制度沉淀）
@@ -920,7 +957,7 @@ export default function IssueList() {
                 ) : detailIssue.stage === 'rechecking' ? (
                   <div className="flex items-center gap-3 flex-wrap">
                     <button
-                      onClick={() => advanceStage(detailIssue.id)}
+                      onClick={() => runAction(() => advanceStage(detailIssue.id))}
                       disabled={(detailIssue.rechecks ?? []).length < (detailIssue.recheckRequired ?? 3)}
                       title="复查全部合格后才能进入制度沉淀"
                       className="px-4 py-1.5 rounded-full bg-[#007AFF] text-white text-[12px] font-medium hover:bg-[#0066D6] transition-colors disabled:opacity-40"
@@ -933,7 +970,7 @@ export default function IssueList() {
                   <p className="text-[12px] text-[#248A3D]">整改闭环已完成</p>
                 ) : (
                   <button
-                    onClick={() => advanceStage(detailIssue.id)}
+                    onClick={() => runAction(() => advanceStage(detailIssue.id))}
                     className="px-4 py-1.5 rounded-full bg-[#007AFF] text-white text-[12px] font-medium hover:bg-[#0066D6] transition-colors"
                   >
                     完成本阶段（{STAGE_LABEL[detailIssue.stage ?? 'rechecking']}）
@@ -1013,21 +1050,23 @@ export default function IssueList() {
                         <span className={`text-[12px] ${overdueRecheck ? 'text-[#FF9500]' : 'text-neutral-400'}`}>
                           {doneAt ? `已完成 ${fmtDateTime(doneAt)}` : `应查 ${fmtDate(new Date(dueMs).toISOString())}${overdueRecheck ? ' · 已到期' : ''}`}
                         </span>
-                        {isNext && (
+                        {isNext && (detailIssue.status === 'review' || (detailIssue.status === 'closed' && detailIssue.stage !== 'done')) && (
                           <span className="ml-auto flex items-center gap-2">
                             <button
-                              onClick={() => recheckIssue(detailIssue.id, true)}
+                              onClick={() => runAction(() => recheckIssue(detailIssue.id, true))}
+                              disabled={recheckSubmitting}
                               title="复发顺延：要求复查次数 +1，保持复查中阶段"
-                              className="flex items-center gap-1 px-3 py-1 rounded-full bg-[#FF3B30]/10 text-[#D70015] text-[12px] font-medium hover:bg-[#FF3B30]/20 transition-colors"
+                              className="flex items-center gap-1 px-3 py-1 rounded-full bg-[#FF3B30]/10 text-[#D70015] text-[12px] font-medium hover:bg-[#FF3B30]/20 transition-colors disabled:opacity-50"
                             >
                               <XCircle className="w-3.5 h-3.5" />
                               不合格·复发
                             </button>
                             <button
-                              onClick={() => recheckIssue(detailIssue.id)}
-                              className="px-3 py-1 rounded-full bg-[#34C759] text-white text-[12px] font-medium hover:bg-[#2DB34E] transition-colors"
+                              onClick={() => completeRecheck(detailIssue)}
+                              disabled={recheckSubmitting}
+                              className="px-3 py-1 rounded-full bg-[#34C759] text-white text-[12px] font-medium hover:bg-[#2DB34E] transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                             >
-                              完成本次复查
+                              {recheckSubmitting ? '正在提交…' : '完成本次复查'}
                             </button>
                           </span>
                         )}
@@ -1035,6 +1074,17 @@ export default function IssueList() {
                     )
                   })}
                 </ul>
+                {detailIssue.status !== 'review' && detailIssue.status !== 'closed' && NEXT_ACTION[detailIssue.status] && (
+                  <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-[#007AFF]/15 bg-[#007AFF]/5 px-3 py-2.5">
+                    <p className="text-[12px] leading-relaxed text-neutral-500">当前还未进入待复查状态，请先完成前面的整改流程。</p>
+                    <button
+                      onClick={() => transition(detailIssue)}
+                      className="shrink-0 rounded-full bg-[#007AFF] px-3 py-1.5 text-[12px] font-medium text-white hover:bg-[#0066D6]"
+                    >
+                      {NEXT_ACTION[detailIssue.status]!.label}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1080,7 +1130,7 @@ export default function IssueList() {
             <div className="flex items-center justify-end gap-2 pt-1">
               {/* 好做法切换：正面典型沉淀到知识库，取消标记则移除 */}
               <button
-                onClick={() => updateIssue(detailIssue.id, { isGood: !detailIssue.isGood })}
+                onClick={() => runAction(() => updateIssue(detailIssue.id, { isGood: !detailIssue.isGood }))}
                 title={detailIssue.isGood ? '取消后将从知识库「好做法」移除' : '标记为正面典型，自动沉淀到知识库「好做法」'}
                 className={`mr-auto flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium transition-colors ${
                   detailIssue.isGood

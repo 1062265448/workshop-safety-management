@@ -37,6 +37,13 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-wsms}:${POSTGRES_PASSWORD}@${POSTGRES_HOST:-db}:5432/${POSTGRES_DB:-workshop_safety}
       PORT: 3100
       JWT_SECRET: ${JWT_SECRET:?请在 .env.prod 中设置 JWT_SECRET}
+      # 新保存的 LLM API Key 使用 AES-256-GCM 加密；未设置时保存新 Key 会明确失败
+      SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
+      # Linux 备份目录；pg_dump 密码仅通过 PGPASSWORD 子进程环境传递
+      BACKUP_DIR: /app/backups
+      # 钉钉默认仅适用于 Windows 执行器，Linux 生产默认禁用
+      DINGTALK_ENABLED: ${DINGTALK_ENABLED:-false}
+      DINGTALK_EXECUTOR: ${DINGTALK_EXECUTOR:-}
       # 大模型（DeepSeek，可选；留空则知识库仅提供语义检索）
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
@@ -46,6 +53,7 @@ services:
       - "${APP_PORT:-3100}:3100"
     volumes:
       - wsms-uploads:/app/backend/uploads
+      - wsms-backups:/app/backups
     networks:
       - wsms-internal
 
@@ -56,3 +64,4 @@ networks:
 volumes:
   wsms-pgdata:
   wsms-uploads:
+  wsms-backups:

@@ -13,7 +13,7 @@ const NAV = [
   { to: '/entry', label: '问题录入', icon: FilePlus2 },
   { to: '/issues', label: '问题库', icon: ClipboardList },
   { to: '/annotations', label: '参考标注', icon: Flag },
-  { to: '/knowledge', label: '知识库', icon: BookOpen },
+  { to: '/knowledge', label: '知识检索', icon: BookOpen },
   { to: '/tags', label: '标签管理', icon: Tags },
   { to: '/stats', label: '周期统计', icon: BarChart3 },
   { to: '/plans', label: '检查计划', icon: CalendarClock },

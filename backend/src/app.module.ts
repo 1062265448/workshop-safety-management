@@ -16,6 +16,11 @@ import { RegulationsModule } from './modules/regulations/regulations.module'
 import { PrelabelModule } from './modules/issues/prelabel.module'
 import { BackupModule } from './modules/backup/backup.module'
 import { DingtalkModule } from './modules/dingtalk/dingtalk.module'
+import { ImportsModule } from './modules/imports/imports.module'
+import { AgentModule } from './modules/agent/agent.module'
+import { OutboxModule } from './modules/outbox/outbox.module'
+import { MetricsModule } from './modules/metrics/metrics.module'
+import { PrismaService } from './prisma.service'
 
 @Module({
   imports: [
@@ -50,8 +55,13 @@ import { DingtalkModule } from './modules/dingtalk/dingtalk.module'
     PrelabelModule,
     BackupModule,
     DingtalkModule,
+    ImportsModule,
+    AgentModule,
+    OutboxModule,
+    MetricsModule,
   ],
   providers: [
+    PrismaService,
     // 全局守卫：AuthGuard 先认证，RolesGuard 再按角色授权（@Roles 显式声明 > 默认 viewer 只读）
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },

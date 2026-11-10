@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- 徽标组件与共享展示配置作为同一公共模块导出。 */
 import type { CauseType, CountermeasureLevel, IssueSource, IssueStage, IssueStatus, RegulationCategory, RiskLevel } from '@/types'
 import { cn } from '@/lib/utils'
 

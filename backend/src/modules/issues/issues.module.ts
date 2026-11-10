@@ -1,13 +1,13 @@
 import { Module } from '@nestjs/common'
 import { PrismaService } from '../../prisma.service'
-import { KnowledgeModule } from '../knowledge/knowledge.module'
-import { AssessmentsModule } from '../assessments/assessments.module'
+import { OutboxModule } from '../outbox/outbox.module'
+import { AuditModule } from '../audit/audit.module'
 import { IssuesController } from './issues.controller'
 import { IssuesService } from './issues.service'
 export { IssuesService } from './issues.service'
 
 @Module({
-  imports: [KnowledgeModule, AssessmentsModule],
+  imports: [OutboxModule, AuditModule],
   controllers: [IssuesController],
   providers: [IssuesService, PrismaService],
   exports: [IssuesService],

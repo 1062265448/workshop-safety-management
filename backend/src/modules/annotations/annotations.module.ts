@@ -1,7 +1,8 @@
 import { Body, Controller, Delete, Get, Module, NotFoundException, Param, Put } from '@nestjs/common'
 import { Injectable } from '@nestjs/common'
 import { PrismaService } from '../../prisma.service'
-import { KnowledgeModule, KnowledgeService } from '../knowledge/knowledge.module'
+import { randomUUID } from 'crypto'
+import { OutboxModule, OutboxService } from '../outbox/outbox.module'
 
 // ─────────────────────────────────────────────────────────────
 // 参考件问题标注：评估其他车间问题对成品车间的参考意义
@@ -14,7 +15,7 @@ const RELEVANCE = new Set(['high', 'medium', 'low'])
 export class AnnotationsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly knowledge: KnowledgeService,
+    private readonly outbox: OutboxService,
   ) {}
 
   findAll() {
@@ -37,18 +38,22 @@ export class AnnotationsService {
       caution: (body.caution ?? '').trim(),
       tagId,
     }
-    const saved = await this.prisma.issueAnnotation.upsert({
-      where: { issueId },
-      create: { issueId, ...data },
-      update: data,
+    const saved = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.issueAnnotation.upsert({ where: { issueId }, create: { issueId, ...data }, update: data })
+      await this.outbox.enqueue(tx, 'knowledge.issue.sync', `annotation:${randomUUID()}`, { issueIds: [issueId] })
+      return row
     })
-    void this.knowledge.syncIssues([issueId]) // 参考意义写进知识库文档
+    this.outbox.kick()
     return saved
   }
 
   async remove(issueId: string) {
-    const removed = await this.prisma.issueAnnotation.deleteMany({ where: { issueId } })
-    void this.knowledge.syncIssues([issueId]) // 标注删除同步移除文档中的参考意义段
+    const removed = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.issueAnnotation.deleteMany({ where: { issueId } })
+      await this.outbox.enqueue(tx, 'knowledge.issue.sync', `annotation:${randomUUID()}`, { issueIds: [issueId] })
+      return result
+    })
+    this.outbox.kick()
     return removed
   }
 }
@@ -74,7 +79,7 @@ export class AnnotationsController {
 }
 
 @Module({
-  imports: [KnowledgeModule],
+  imports: [OutboxModule],
   controllers: [AnnotationsController],
   providers: [AnnotationsService, PrismaService],
 })

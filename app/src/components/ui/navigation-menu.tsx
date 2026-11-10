@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- UI 组件与其样式函数作为同一公共模块导出。 */
 import * as React from "react"
 import * as NavigationMenuPrimitive from "@radix-ui/react-navigation-menu"
 import { cva } from "class-variance-authority"

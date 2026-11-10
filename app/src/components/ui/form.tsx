@@ -1,5 +1,6 @@
 "use client"
 
+/* eslint-disable react-refresh/only-export-components -- 表单组件与配套 hooks 作为同一公共模块导出。 */
 import * as React from "react"
 import type * as LabelPrimitive from "@radix-ui/react-label"
 import { Slot } from "@radix-ui/react-slot"

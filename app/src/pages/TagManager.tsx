@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Pencil, Plus, Trash2, X } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import type { Tag, TagGroup } from '@/types'
@@ -28,21 +28,22 @@ export default function TagManager() {
   const [subName, setSubName] = useState('')
   const [subError, setSubError] = useState('')
 
-  useEffect(() => {
-    if (!dialog) return
-    setName(dialog.mode === 'edit' ? dialog.tag.name : '')
-    setColor(dialog.mode === 'edit' ? dialog.tag.color : PALETTE[Math.floor(Math.random() * PALETTE.length)])
+  const openDialog = (next: Exclude<DialogState, null>) => {
+    setDialog(next)
+    setName(next.mode === 'edit' ? next.tag.name : '')
+    setColor(next.mode === 'edit' ? next.tag.color : PALETTE[tags.length % PALETTE.length])
     setError('')
-  }, [dialog])
+  }
 
-  useEffect(() => {
+  const openSubManager = (tag: Tag) => {
+    setSubParent(tag)
     setSubName('')
     setSubError('')
-  }, [subParent])
+  }
 
   const dialogGroup: TagGroup | null = dialog ? (dialog.mode === 'add' ? dialog.group : dialog.tag.group) : null
 
-  const submit = () => {
+  const submit = async () => {
     if (!dialog) return
     const trimmed = name.trim()
     if (!trimmed) return
@@ -50,13 +51,18 @@ export default function TagManager() {
       setError(`「${trimmed}」已存在`)
       return
     }
-    if (dialog.mode === 'add') addTag({ name: trimmed, group: dialog.group, color })
-    else updateTag(dialog.tag.id, { name: trimmed, color })
-    setDialog(null)
+    setError('')
+    try {
+      if (dialog.mode === 'add') await addTag({ name: trimmed, group: dialog.group, color })
+      else await updateTag(dialog.tag.id, { name: trimmed, color })
+      setDialog(null)
+    } catch (error) {
+      setError(error instanceof Error ? error.message : '保存标签失败，请重试')
+    }
   }
 
   /** 新增子标签：维度组与颜色继承父标签 */
-  const submitSub = () => {
+  const submitSub = async () => {
     if (!subParent) return
     const trimmed = subName.trim()
     if (!trimmed) return
@@ -64,9 +70,13 @@ export default function TagManager() {
       setSubError(`「${trimmed}」已存在`)
       return
     }
-    addTag({ name: trimmed, group: subParent.group, color: subParent.color, parentId: subParent.id })
-    setSubName('')
     setSubError('')
+    try {
+      await addTag({ name: trimmed, group: subParent.group, color: subParent.color, parentId: subParent.id })
+      setSubName('')
+    } catch (error) {
+      setSubError(error instanceof Error ? error.message : '添加子标签失败，请重试')
+    }
   }
 
   return (
@@ -94,7 +104,7 @@ export default function TagManager() {
                   >
                     {/* 隐患类型标签：点击名字弹窗管理子标签 */}
                     {key === 'category' ? (
-                      <button onClick={() => setSubParent(t)} title="查看 / 编辑子标签" className="hover:underline underline-offset-2">
+                      <button onClick={() => openSubManager(t)} title="查看 / 编辑子标签" className="hover:underline underline-offset-2">
                         {t.name}
                       </button>
                     ) : (
@@ -102,7 +112,7 @@ export default function TagManager() {
                     )}
                     {subCount > 0 && (
                       <button
-                        onClick={() => setSubParent(t)}
+                        onClick={() => openSubManager(t)}
                         title="查看子标签"
                         className="px-1 rounded-full text-[10px] font-semibold"
                         style={{ backgroundColor: `${t.color}33` }}
@@ -111,7 +121,7 @@ export default function TagManager() {
                       </button>
                     )}
                     <button
-                      onClick={() => setDialog({ mode: 'edit', tag: t })}
+                      onClick={() => openDialog({ mode: 'edit', tag: t })}
                       title="修改标签"
                       className="opacity-0 group-hover:opacity-100 transition-opacity"
                     >
@@ -131,7 +141,7 @@ export default function TagManager() {
               })}
             </div>
             <button
-              onClick={() => setDialog({ mode: 'add', group: key })}
+              onClick={() => openDialog({ mode: 'add', group: key })}
               className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-neutral-300 text-[13px] text-neutral-500 hover:border-[#007AFF] hover:text-[#007AFF] hover:bg-[#007AFF]/5 transition-colors"
             >
               <Plus className="w-4 h-4" />
@@ -248,7 +258,7 @@ export default function TagManager() {
                 >
                   {s.name}
                   <button
-                    onClick={() => setDialog({ mode: 'edit', tag: s })}
+                    onClick={() => openDialog({ mode: 'edit', tag: s })}
                     title="修改子标签"
                     className="opacity-0 group-hover:opacity-100 transition-opacity"
                   >

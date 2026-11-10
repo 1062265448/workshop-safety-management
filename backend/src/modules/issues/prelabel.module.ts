@@ -12,7 +12,7 @@ import { Body, Controller, Delete, Get, Module, Param, Post } from '@nestjs/comm
 import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common'
 import { PrismaService } from '../../prisma.service'
 import { KnowledgeModule } from '../knowledge/knowledge.module'
-import { LlmService, LlmConfig } from '../knowledge/llm.service'
+import { chatCompletionsEndpoint, modelTemperature, LlmService, LlmConfig } from '../knowledge/llm.service'
 
 // ── 类型 ─────────────────────────────────────────────────────
 
@@ -93,12 +93,12 @@ export class PrelabelService {
 
   /** 调 OpenAI 兼容 chat 接口，返回文本内容；失败抛错由调用方降级 */
   private async chat(cfg: LlmConfig, system: string, user: string): Promise<string> {
-    const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+    const res = await fetch(chatCompletionsEndpoint(cfg.baseUrl), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
       body: JSON.stringify({
         model: cfg.model,
-        temperature: 0.1,
+        temperature: modelTemperature(cfg.model, 0.1),
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: system },

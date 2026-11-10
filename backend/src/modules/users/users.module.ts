@@ -2,7 +2,7 @@ import { Body, ConflictException, Controller, Delete, Get, NotFoundException, Pa
 import { BadRequestException, ForbiddenException, Injectable, Module } from '@nestjs/common'
 import * as bcrypt from 'bcryptjs'
 import { PrismaService } from '../../prisma.service'
-import { Roles } from '../auth/auth.module'
+import { authTokenVersionKey, nextAuthTokenVersion, Roles } from '../auth/auth.module'
 
 // ─────────────────────────────────────────────────────────────
 // 用户管理（仅 admin）：列表 / 新建 / 编辑 / 重置密码 / 删除
@@ -66,33 +66,58 @@ export class UsersService {
     if (body.role && body.role !== 'admin' && user.role === 'admin') {
       await this.assertAnotherAdminRemains(id)
     }
-    return this.prisma.user.update({
-      where: { id },
-      data: {
-        displayName: body.displayName !== undefined ? body.displayName.trim() : undefined,
-        role: body.role as Role | undefined,
-      },
-      select: { id: true, username: true, displayName: true, role: true, createdAt: true },
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.user.update({
+        where: { id },
+        data: {
+          displayName: body.displayName !== undefined ? body.displayName.trim() : undefined,
+          role: body.role as Role | undefined,
+        },
+        select: { id: true, username: true, displayName: true, role: true, createdAt: true },
+      })
+      if (body.role !== undefined && body.role !== user.role) {
+        await tx.setting.upsert({
+          where: { key: authTokenVersionKey(id) },
+          create: { key: authTokenVersionKey(id), value: nextAuthTokenVersion() },
+          update: { value: nextAuthTokenVersion() },
+        })
+      }
+      return updated
     })
   }
 
-  /** 管理员重置他人密码 */
+  /** 管理员重置他人密码，同时撤销该用户全部现有令牌。 */
   async resetPassword(id: string, actorId: string, password: string) {
     if (id === actorId) throw new ForbiddenException('修改自己的密码请用「修改密码」入口')
     const user = await this.prisma.user.findUnique({ where: { id } })
     if (!user) throw new NotFoundException('用户不存在')
     assertPasswordPolicy(password)
-    await this.prisma.user.update({ where: { id }, data: { passwordHash: await bcrypt.hash(password, 10) } })
+    const passwordHash = await bcrypt.hash(password, 10)
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id }, data: { passwordHash } })
+      await tx.setting.upsert({
+        where: { key: authTokenVersionKey(id) },
+        create: { key: authTokenVersionKey(id), value: nextAuthTokenVersion() },
+        update: { value: nextAuthTokenVersion() },
+      })
+    })
     return { ok: true }
   }
 
-  /** 删除用户：不能删自己；删除 admin 前确认还有其他 admin */
+  /** 删除与版本提升原子执行；守卫的实时 User 查询会立即拒绝已删除账号。 */
   async remove(id: string, actorId: string) {
     if (id === actorId) throw new ForbiddenException('不能删除当前登录账号')
     const user = await this.prisma.user.findUnique({ where: { id } })
     if (!user) throw new NotFoundException('用户不存在')
     if (user.role === 'admin') await this.assertAnotherAdminRemains(id)
-    await this.prisma.user.delete({ where: { id } })
+    await this.prisma.$transaction(async (tx) => {
+      await tx.setting.upsert({
+        where: { key: authTokenVersionKey(id) },
+        create: { key: authTokenVersionKey(id), value: nextAuthTokenVersion() },
+        update: { value: nextAuthTokenVersion() },
+      })
+      await tx.user.delete({ where: { id } })
+    })
     return { ok: true }
   }
 

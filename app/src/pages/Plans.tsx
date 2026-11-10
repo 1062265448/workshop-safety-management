@@ -11,6 +11,7 @@ const FREQ_LABEL: Record<PlanFrequency, string> = { daily: '每日', weekly: '�
 export default function Plans() {
   const { plans, issues, tags, reminders, addPlan, updatePlan, removePlan, completePlan, markReminderRead } = useStore()
   const [form, setForm] = useState({ name: '', scope: '', frequency: 'weekly' as PlanFrequency, nextRunAt: '', remindBeforeMinutes: 60 })
+  const [actionError, setActionError] = useState('')
   /** 正在填写执行记录的计划 id */
   const [completingId, setCompletingId] = useState<string | null>(null)
   const [execForm, setExecForm] = useState({ executor: '', note: '', issueIds: [] as string[] })
@@ -67,30 +68,40 @@ export default function Plans() {
         .slice(0, 8)
     : []
 
-  const submitComplete = (planId: string) => {
-    completePlan(planId, {
-      executor: execForm.executor.trim(),
-      note: execForm.note.trim(),
-      issueIds: execForm.issueIds,
-    })
-    setCompletingId(null)
-    setExecForm({ executor: '', note: '', issueIds: [] })
-    setLinkQuery('')
+  const submitComplete = async (planId: string) => {
+    setActionError('')
+    try {
+      await completePlan(planId, {
+        executor: execForm.executor.trim(),
+        note: execForm.note.trim(),
+        issueIds: execForm.issueIds,
+      })
+      setCompletingId(null)
+      setExecForm({ executor: '', note: '', issueIds: [] })
+      setLinkQuery('')
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '完成检查失败，请重试')
+    }
   }
 
-  const submit = () => {
+  const submit = async () => {
     if (!form.name.trim() || !form.nextRunAt) return
-    addPlan({
-      name: form.name.trim(),
-      scope: form.scope.trim(),
-      frequency: form.frequency,
-      nextRunAt: new Date(form.nextRunAt).toISOString(),
-      checklist: [],
-      remindBeforeMinutes: form.remindBeforeMinutes,
-      enabled: true,
-    })
-    setForm(blankForm)
-    setTemplateKey(null)
+    setActionError('')
+    try {
+      await addPlan({
+        name: form.name.trim(),
+        scope: form.scope.trim(),
+        frequency: form.frequency,
+        nextRunAt: new Date(form.nextRunAt).toISOString(),
+        checklist: [],
+        remindBeforeMinutes: form.remindBeforeMinutes,
+        enabled: true,
+      })
+      setForm(blankForm)
+      setTemplateKey(null)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : '添加计划失败，请重试')
+    }
   }
 
   const inputCls = 'px-3 py-2 rounded-lg bg-neutral-100/80 text-[13px] outline-none focus:ring-2 ring-[#007AFF]/30'
@@ -101,6 +112,8 @@ export default function Plans() {
         <h1 className="text-2xl font-semibold">检查计划与提醒</h1>
         <p className="text-sm text-neutral-500 mt-1">周期检查计划到点提醒；整改超期自动生成提醒</p>
       </header>
+
+      {actionError && <div className="px-4 py-2.5 rounded-xl bg-[#FF3B30]/10 text-[#D70015] text-[13px]">{actionError}</div>}
 
       {/* 新建计划 */}
       <section className="bg-white rounded-2xl p-5 shadow-sm">

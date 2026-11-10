@@ -3,7 +3,7 @@
 // 提供语义检索 + AI 问答（LLM 未配置 Key 时只返回检索结果）
 // 重建索引为后台任务：POST /reindex 立即返回，GET /reindex/status 轮询进度
 // ─────────────────────────────────────────────────────────────
-import { Body, Controller, Get, Module, NotFoundException, Param, Post, Put, Query } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Module, NotFoundException, Param, Post, Put, Query } from '@nestjs/common'
 import { Injectable, BadRequestException } from '@nestjs/common'
 import { readdirSync, readFileSync, existsSync } from 'fs'
 import { join, resolve } from 'path'
@@ -240,45 +240,38 @@ export class KnowledgeService {
     }
   }
 
-  /** 增量同步：把指定隐患按最新内容重建向量文档（增/改/恢复后调用；已删的仅清旧文档）
-   *  后台静默执行，失败只打日志——知识库页仍可手动全量重建兜底 */
+  /** 增量同步由 Outbox 串行调用；失败必须抛出，交给持久化重试而不是伪装成功。 */
   async syncIssues(ids: string[]) {
     const unique = [...new Set(ids)].filter(Boolean)
-    if (unique.length === 0 || this.job.running || !this.embedding.ready) return
-    try {
-      const [issues, tags, annotations] = await Promise.all([
-        this.prisma.issue.findMany({ where: { id: { in: unique }, deletedAt: null } }),
-        this.prisma.tag.findMany(),
-        this.prisma.issueAnnotation.findMany({ where: { issueId: { in: unique } } }),
-      ])
-      const tagName = new Map(tags.map((t) => [t.id, t.name]))
-      const annByIssue = new Map(annotations.map((a) => [a.issueId, a]))
-      // 先清旧文档（chunks 级联删除），再按最新内容重建；好做法文档由 syncGoodDoc 单独维护
-      await this.prisma.knowledgeDoc.deleteMany({ where: { kind: 'issue', refId: { in: unique } } })
-      const flat: { docId: string; seq: number; content: string }[] = []
-      for (const issue of issues) {
-        if (issue.isGood) continue // 正面典型不入隐患案例库，见 syncGoodDoc
-        const draft = this.buildIssueDraft(issue, tagName, annByIssue.get(issue.id))
-        const doc = await this.prisma.knowledgeDoc.create({
-          data: { kind: draft.kind, refId: draft.refId, title: draft.title, source: draft.source },
-        })
-        draft.chunks.forEach((content, seq) => flat.push({ docId: doc.id, seq, content }))
-      }
-      await this.embedAndInsert(flat)
-    } catch (e) {
-      console.warn('[knowledge] 增量索引失败（可在知识库页手动重建）:', (e as Error).message)
+    if (unique.length === 0) return
+    if (this.job.running) throw new Error('知识库正在全量重建，增量同步将在稍后重试')
+    const [issues, tags, annotations] = await Promise.all([
+      this.prisma.issue.findMany({ where: { id: { in: unique }, deletedAt: null } }),
+      this.prisma.tag.findMany(),
+      this.prisma.issueAnnotation.findMany({ where: { issueId: { in: unique } } }),
+    ])
+    const tagName = new Map(tags.map((t) => [t.id, t.name]))
+    const annByIssue = new Map(annotations.map((a) => [a.issueId, a]))
+    // 先清旧文档（chunks 级联删除），再按最新内容重建；好做法文档由 syncGoodDoc 单独维护
+    await this.prisma.knowledgeDoc.deleteMany({ where: { kind: 'issue', refId: { in: unique } } })
+    const flat: { docId: string; seq: number; content: string }[] = []
+    for (const issue of issues) {
+      if (issue.isGood) continue // 正面典型不入隐患案例库，见 syncGoodDoc
+      const draft = this.buildIssueDraft(issue, tagName, annByIssue.get(issue.id))
+      const doc = await this.prisma.knowledgeDoc.create({
+        data: { kind: draft.kind, refId: draft.refId, title: draft.title, source: draft.source },
+      })
+      draft.chunks.forEach((content, seq) => flat.push({ docId: doc.id, seq, content }))
     }
+    // 模型未就绪时也写入文本切片，向量留空，后续可通过全量重建补齐。
+    await this.embedAndInsert(flat)
   }
 
-  /** 增量删除：隐患进回收站或彻底删除时移除其向量文档（含好做法文档） */
+  /** 增量删除：失败抛出给 Outbox 持久化重试。 */
   async removeIssueDocs(ids: string[]) {
     const unique = [...new Set(ids)].filter(Boolean)
     if (unique.length === 0) return
-    try {
-      await this.prisma.knowledgeDoc.deleteMany({ where: { kind: { in: ['issue', 'practice'] }, refId: { in: unique } } })
-    } catch (e) {
-      console.warn('[knowledge] 增量删除向量文档失败:', (e as Error).message)
-    }
+    await this.prisma.knowledgeDoc.deleteMany({ where: { kind: { in: ['issue', 'practice'] }, refId: { in: unique } } })
   }
 
   /**
@@ -287,31 +280,26 @@ export class KnowledgeService {
    * 嵌入模型未就绪时退化为纯文本切片（不入语义检索，重建索引后自动补向量）。
    */
   async syncGoodDoc(issueId: string): Promise<string | null> {
-    try {
-      const issue = await this.prisma.issue.findUnique({ where: { id: issueId } })
-      if (!issue) return null
-      await this.prisma.knowledgeDoc.deleteMany({ where: { kind: 'practice', refId: issueId } })
-      if (!issue.isGood || issue.deletedAt) {
-        if (issue.linkedGoodDocId) {
-          await this.prisma.issue.update({ where: { id: issueId }, data: { linkedGoodDocId: null } })
-        }
-        return null
+    const issue = await this.prisma.issue.findUnique({ where: { id: issueId } })
+    if (!issue) return null
+    await this.prisma.knowledgeDoc.deleteMany({ where: { kind: 'practice', refId: issueId } })
+    if (!issue.isGood || issue.deletedAt) {
+      if (issue.linkedGoodDocId) {
+        await this.prisma.issue.update({ where: { id: issueId }, data: { linkedGoodDocId: null } })
       }
-      const tags = await this.prisma.tag.findMany()
-      const tagName = new Map(tags.map((t) => [t.id, t.name]))
-      const draft = this.buildGoodDraft(issue, tagName)
-      const doc = await this.prisma.knowledgeDoc.create({
-        data: { kind: draft.kind, refId: draft.refId, title: draft.title, source: draft.source },
-      })
-      await this.embedAndInsert(draft.chunks.map((content, seq) => ({ docId: doc.id, seq, content })))
-      if (issue.linkedGoodDocId !== doc.id) {
-        await this.prisma.issue.update({ where: { id: issueId }, data: { linkedGoodDocId: doc.id } })
-      }
-      return doc.id
-    } catch (e) {
-      console.warn('[knowledge] 好做法文档同步失败:', (e as Error).message)
       return null
     }
+    const tags = await this.prisma.tag.findMany()
+    const tagName = new Map(tags.map((t) => [t.id, t.name]))
+    const draft = this.buildGoodDraft(issue, tagName)
+    const doc = await this.prisma.knowledgeDoc.create({
+      data: { kind: draft.kind, refId: draft.refId, title: draft.title, source: draft.source },
+    })
+    await this.embedAndInsert(draft.chunks.map((content, seq) => ({ docId: doc.id, seq, content })))
+    if (issue.linkedGoodDocId !== doc.id) {
+      await this.prisma.issue.update({ where: { id: issueId }, data: { linkedGoodDocId: doc.id } })
+    }
+    return doc.id
   }
 
   /** 启动后台全量重建（管理员操作）；已在运行则直接返回当前进度 */
@@ -577,20 +565,46 @@ export class KnowledgeController {
     return this.svc.reindexStatus()
   }
 
-  /** 查看 LLM 配置（apiKey 脱敏，只回是否已配置） */
-  @Get('config')
-  async getConfig() {
-    const cfg = await this.llm.getConfig()
-    return { baseUrl: cfg.baseUrl, model: cfg.model, apiKeySet: !!cfg.apiKey }
+  /** 普通用户仅可获知模型是否可用，用于控制预标注入口。 */
+  @Get('config/status')
+  async getConfigStatus() {
+    return { apiKeySet: await this.llm.isConfigured() }
   }
 
-  /** 保存 LLM 配置（管理员；apiKey 留空表示不改动，clearApiKey 清除已存 Key） */
+  /** 完整配置和历史方案仅管理员可见，接口密钥永不返回前端。 */
+  @Get('config')
+  @Roles('admin')
+  getConfig() {
+    return this.llm.getConfigView()
+  }
+
   @Put('config')
   @Roles('admin')
-  async saveConfig(@Body() body: { apiKey?: string; baseUrl?: string; model?: string; clearApiKey?: boolean }) {
+  async saveConfig(@Body() body: { name?: string; apiKey?: string; baseUrl?: string; model?: string; clearApiKey?: boolean }) {
     await this.llm.saveConfig(body ?? {})
-    const cfg = await this.llm.getConfig()
-    return { baseUrl: cfg.baseUrl, model: cfg.model, apiKeySet: !!cfg.apiKey }
+    return this.llm.getConfigView()
+  }
+
+  /** 新增方案会保留当前方案，保存后切换到新方案。 */
+  @Post('config/profiles')
+  @Roles('admin')
+  async addProfile(@Body() body: { name?: string; apiKey?: string; baseUrl?: string; model?: string }) {
+    await this.llm.addProfile(body ?? {})
+    return this.llm.getConfigView()
+  }
+
+  @Post('config/profiles/:id/activate')
+  @Roles('admin')
+  async activateProfile(@Param('id') id: string) {
+    await this.llm.activateProfile(id)
+    return this.llm.getConfigView()
+  }
+
+  @Delete('config/profiles/:id')
+  @Roles('admin')
+  async deleteProfile(@Param('id') id: string) {
+    await this.llm.deleteProfile(id)
+    return this.llm.getConfigView()
   }
 
   @Get('search')

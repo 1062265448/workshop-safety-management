@@ -80,6 +80,9 @@ model Issue {
   linkedGoodDocId String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+  /// 手工创建幂等：可空唯一键兼容历史数据与导入记录
+  requestKey  String?   @unique
+  requestHash String?
   issueRegulations IssueRegulation[]
 
   @@map("issues")
@@ -306,4 +309,125 @@ model DingtalkImport {
   createdAt  DateTime @default(now())
 
   @@map("dingtalk_imports")
+}
+
+/// 独立导入批次：idempotencyKey 是跨重试的稳定业务键，整批原子提交后才标记 succeeded
+model ImportBatch {
+  id               String    @id @default(cuid())
+  idempotencyKey   String    @unique
+  requestHash      String    @default("")
+  source           String    @default("")
+  externalMessageId String?
+  fileHash         String?
+  status           String    @default("processing")
+  itemCount        Int       @default(0)
+  error            String?
+  createdAt        DateTime  @default(now())
+  completedAt      DateTime?
+
+  @@map("import_batches")
+}
+
+/// 批次明细：不设置 Issue 外键，避免影响既有隐患生命周期；sourceKey 为输入数组索引
+model ImportItem {
+  id        String  @id @default(cuid())
+  batchId   String
+  sourceKey String
+  issueId   String
+  status    String  @default("succeeded")
+  error     String?
+
+  @@unique([batchId, sourceKey])
+  @@index([batchId])
+  @@index([issueId])
+  @@map("import_items")
+}
+
+/// 只读 Agent 的一次有界运行；业务数据只读，仅写入 Agent 自身轨迹
+model AgentRun {
+  id          String      @id @default(cuid())
+  question    String
+  status      String      @default("running") // running | succeeded | waiting_human | failed
+  mode        String      @default("agent") // agent | fallback
+  answer      String      @default("")
+  error       String?
+  createdBy   String
+  createdAt   DateTime    @default(now())
+  completedAt DateTime?
+  steps       AgentStep[]
+
+  @@index([createdBy, createdAt])
+  @@map("agent_runs")
+}
+
+/// 模型、工具和验收步骤的统一轨迹；不保存 API Key 或完整系统提示词
+model AgentStep {
+  id         String   @id @default(cuid())
+  runId      String
+  run        AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  seq        Int
+  kind       String // model | tool | validation
+  name       String
+  status     String // succeeded | failed
+  input      Json
+  output     Json?
+  durationMs Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@unique([runId, seq])
+  @@map("agent_steps")
+}
+
+/// 防复发复查明细；保留每次合格/不合格结论及证据
+model RecheckRecord {
+  id        String   @id @default(cuid())
+  issueId   String
+  result    String // pass | fail
+  pass      Boolean
+  fail      Boolean
+  actor     String
+  note      String   @default("")
+  photos    String[] @default([])
+  checkedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  @@index([issueId, checkedAt])
+  @@map("recheck_records")
+}
+
+/// 核心工作流审计日志；不使用外键，彻底删除隐患后仍保留轨迹
+model AuditLog {
+  id        String   @id @default(cuid())
+  issueId   String?
+  actor     String
+  action    String
+  from      Json?
+  to        Json?
+  detail    Json?
+  requestId String?
+  createdAt DateTime @default(now())
+
+  @@index([issueId, createdAt])
+  @@index([actor, createdAt])
+  @@map("audit_logs")
+}
+
+/// 可靠副作用事件：业务事务内落库，事务后即时/定时消费
+model OutboxEvent {
+  id             String    @id @default(cuid())
+  idempotencyKey String    @unique
+  type           String
+  payload        Json
+  status         String    @default("pending") // pending | processing | succeeded | failed
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(8)
+  lastError      String?
+  nextAttemptAt  DateTime  @default(now())
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  completedAt    DateTime?
+
+  @@index([status, nextAttemptAt])
+  @@index([type, status])
+  @@map("outbox_events")
 }

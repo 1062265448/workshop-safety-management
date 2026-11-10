@@ -7,6 +7,18 @@ import { inspectAttr } from 'kimi-plugin-inspect-react'
 export default defineConfig({
   base: './',
   plugins: [inspectAttr(), react()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-dom/client', 'react-router'],
+          'chart-vendor': ['recharts'],
+          'spreadsheet-vendor': ['xlsx'],
+          'document-vendor': ['mammoth'],
+        },
+      },
+    },
+  },
   server: {
     port: 7100,
     proxy: {

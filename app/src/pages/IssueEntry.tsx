@@ -1,15 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { FileUp, FolderOpen, Loader2, CheckSquare, Square, ClipboardCheck, ImagePlus, ThumbsUp, X, ChevronDown, ChevronRight, Sparkles, CheckCircle2 } from 'lucide-react'
-import { uploadPhotos, useStore } from '@/lib/store'
+import { api, uploadPhotos, useStore } from '@/lib/store'
 import { isManagedWorkshop, TEAMS, countGridOwners, withSubTags } from '@/lib/config'
 import { detectSource, parseFileOffthread, type SkippedPage } from '@/lib/import/parsers'
 import { matchReview } from '@/lib/import/matchReview'
+import { clearImportDraft, loadImportDraft, saveImportDraft, type ImportDraftSnapshot } from '@/lib/importDraftStorage'
 import { RISK_LABEL, RiskBadge, StatusBadge, CAUSE_TYPE_LABEL, COUNTERMEASURE_LABEL } from '@/components/badges'
 import type { CauseType, CountermeasureLevel, IssueDraft, IssueSource, PrelabelSuggestion, ReviewDraft, RiskLevel, StyleCheckResult } from '@/types'
 
 // ── 录入联动：与知识库语义比对，提示相似既有隐患 ──
 interface SimilarCase { issueId: string; title: string; score: number; snippet: string; locationName?: string | null; foundAt?: string | null; status?: string | null }
+type DraftWithUpload = IssueDraft & { uploadedPhotoPaths?: string[] }
+type ReviewWithUpload = ReviewDraft & { uploadedPhotoPaths?: string[] }
 
 /** 查重元数据核对：车间、日期任一明确不同 → 'diff'（不算同一问题）；信息缺失时不做否定判断（与后端 dupMetaVerdict 规则一致） */
 function dupMetaVerdict(
@@ -26,26 +29,30 @@ function dupMetaVerdict(
   return 'same'
 }
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = localStorage.getItem('wsms-token')
-  const res = await fetch(`/api${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...init?.headers,
-    },
-  })
-  if (!res.ok) throw new Error(`${init?.method ?? 'GET'} ${path} → ${res.status}`)
-  return res.json() as Promise<T>
-}
-
 export default function IssueEntry() {
-  const { tags, issues, addIssue, addIssues, updateIssue, ensureTag } = useStore()
+  const { tags, issues, addIssue, addIssues, closeIssue, ensureTag } = useStore()
   const navigate = useNavigate()
   const [tab, setTab] = useState<'manual' | 'file'>('manual')
 
   // ── 手动录入 ──
+  // 草稿级幂等键持久化：网络超时后重试仍用同一键；只有服务端确认成功才轮换。
+  const [manualIdempotencyKey, setManualIdempotencyKey] = useState(() => {
+    const storageKey = 'wssm-manual-issue-idempotency-key'
+    const existing = localStorage.getItem(storageKey)
+    if (existing) return existing
+    const created = crypto.randomUUID()
+    localStorage.setItem(storageKey, created)
+    return created
+  })
+  const [manualFoundAt] = useState(() => {
+    const storageKey = 'wssm-manual-issue-found-at'
+    const existing = localStorage.getItem(storageKey)
+    if (existing) return existing
+    const created = new Date().toISOString()
+    localStorage.setItem(storageKey, created)
+    return created
+  })
+  const manualUploadedPhotos = useRef<string[] | null>(null)
   const [form, setForm] = useState({
     title: '', description: '', locationId: '', categoryId: '',
     riskLevel: 'general' as RiskLevel, assignee: '', deadline: '',
@@ -58,6 +65,7 @@ export default function IssueEntry() {
   /** 待上传的现场照片（本地 File，提交时统一上传） */
   const [photoFiles, setPhotoFiles] = useState<File[]>([])
   const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState('')
   const photoRef = useRef<HTMLInputElement>(null)
   const categories = tags.filter((t) => t.group === 'category')
   const locations = tags.filter((t) => t.group === 'location')
@@ -67,7 +75,7 @@ export default function IssueEntry() {
   // ── AI 能力：DeepSeek Key 在知识库页配置，未配置时 AI 按钮禁用/隐藏 ──
   const [llmReady, setLlmReady] = useState(false)
   useEffect(() => {
-    api<{ apiKeySet: boolean }>('/knowledge/config').then((c) => setLlmReady(c.apiKeySet)).catch(() => setLlmReady(false))
+    api<{ apiKeySet: boolean }>('/knowledge/config/status').then((c) => setLlmReady(c.apiKeySet)).catch(() => setLlmReady(false))
   }, [])
 
   // ── 文字规范检查（手动录入「问题描述」）：四要素 + 模糊词拦截，只改写不编造 ──
@@ -127,10 +135,12 @@ export default function IssueEntry() {
   const submitManual = async () => {
     if (!form.title.trim() || reasonMissing || submitting) return
     setSubmitting(true)
+    setSubmitError('')
     try {
-      const photos = await uploadPhotos(photoFiles)
+      if (!manualUploadedPhotos.current) manualUploadedPhotos.current = await uploadPhotos(photoFiles)
+      const photos = manualUploadedPhotos.current
       const locationName = tags.find((t) => t.id === form.locationId)?.name
-      addIssue({
+      await addIssue({
         title: form.title.trim(),
         description: form.description.trim(),
         locationId: form.locationId || undefined,
@@ -151,7 +161,7 @@ export default function IssueEntry() {
         causeType: form.causeType || undefined,
         countermeasureLevel: form.causeType === 'system' && form.countermeasureLevel ? form.countermeasureLevel : undefined,
         countermeasureReason: form.countermeasureReason.trim() || undefined,
-        foundAt: new Date().toISOString(),
+        foundAt: manualFoundAt,
         deadline: form.deadline ? new Date(form.deadline).toISOString() : undefined,
         photos,
         recheckIntervalDays: 7,
@@ -162,8 +172,16 @@ export default function IssueEntry() {
         reviewed: true,
         // 正面典型（做得好）：不走整改闭环，自动沉淀知识库「好做法」
         isGood: form.isGood,
-      })
+      }, manualIdempotencyKey)
+      const nextKey = crypto.randomUUID()
+      localStorage.setItem('wssm-manual-issue-idempotency-key', nextKey)
+      localStorage.setItem('wssm-manual-issue-found-at', new Date().toISOString())
+      setManualIdempotencyKey(nextKey)
+      manualUploadedPhotos.current = null
       navigate('/issues')
+    } catch (error) {
+      // 表单与本地照片均保留，用户可直接修正或重试
+      setSubmitError(error instanceof Error ? error.message : '登记失败，请重试')
     } finally {
       setSubmitting(false)
     }
@@ -185,6 +203,8 @@ export default function IssueEntry() {
   const [drafts, setDrafts] = useState<IssueDraft[]>([])
   const [reviews, setReviews] = useState<ReviewDraft[]>([])
   const [skipped, setSkipped] = useState<Array<SkippedPage & { fileName?: string }>>([])
+  const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null)
+  const [draftStorageReady, setDraftStorageReady] = useState(false)
   const [parseError, setParseError] = useState('')
   /** 导入查重：每条草稿与库中既有隐患的疑似重复命中（按草稿 key） */
   const [dupByKey, setDupByKey] = useState<Record<string, SimilarCase[]>>({})
@@ -215,6 +235,52 @@ export default function IssueEntry() {
   }
   // 离开录入页时回收全部 objectURL
   useEffect(() => clearPhotoUrls, [])
+
+  // 串行写入可避免快速编辑时较旧的快照后落盘、覆盖新内容
+  const importPersistQueue = useRef<Promise<void>>(Promise.resolve())
+  const persistSnapshot = useCallback((snapshot: ImportDraftSnapshot): Promise<void> => {
+    const hasContent = Boolean(
+      snapshot.idempotencyKey || snapshot.drafts.length || snapshot.reviews.length || snapshot.sourceFiles.length || snapshot.skipped.length,
+    )
+    const task = importPersistQueue.current
+      .catch(() => undefined)
+      .then(() => (hasContent ? saveImportDraft(snapshot) : clearImportDraft()))
+    importPersistQueue.current = task
+    return task
+  }, [])
+
+  // 挂载时恢复完整暂存区；File 由 IndexedDB structured clone 还原，urlOf 会按需重建 objectURL
+  useEffect(() => {
+    let active = true
+    loadImportDraft()
+      .then((snapshot) => {
+        if (!active || !snapshot) return
+        setDrafts(snapshot.drafts)
+        setReviews(snapshot.reviews)
+        setSourceFiles(snapshot.sourceFiles)
+        setSkipped(snapshot.skipped)
+        const hasContent = Boolean(snapshot.drafts.length || snapshot.reviews.length || snapshot.sourceFiles.length || snapshot.skipped.length)
+        setIdempotencyKey(snapshot.idempotencyKey ?? (hasContent ? crypto.randomUUID() : null))
+        if (hasContent) setTab('file')
+      })
+      .catch((error) => {
+        if (active) setParseError(`恢复上次导入草稿失败：${error instanceof Error ? error.message : '未知错误'}`)
+      })
+      .finally(() => {
+        if (active) setDraftStorageReady(true)
+      })
+    return () => { active = false }
+  }, [])
+
+  // 编辑、勾选、采用 AI 建议及核销选择都会触发持久化；空快照才删除存储记录
+  useEffect(() => {
+    if (!draftStorageReady) return
+    const snapshot: ImportDraftSnapshot = { drafts, reviews, sourceFiles, skipped, idempotencyKey }
+    const timer = window.setTimeout(() => {
+      void persistSnapshot(snapshot).catch((error) => console.error('[import drafts] save', error))
+    }, 200)
+    return () => window.clearTimeout(timer)
+  }, [draftStorageReady, drafts, reviews, sourceFiles, skipped, idempotencyKey, persistSnapshot])
 
   // ── AI 预标注（暂存区批量）：原则二——AI 只预判，人工「采用」后才填入字段 ──
   const [prelabeling, setPrelabeling] = useState(false)
@@ -277,6 +343,8 @@ export default function IssueEntry() {
     setParsing(true)
     setParseStage('读取文件中…')
     setParseError('')
+    // 每一批新文件使用新的幂等键；本批失败后的重试沿用此键
+    setIdempotencyKey(crypto.randomUUID())
     setDrafts([])
     setReviews([])
     setSkipped([])
@@ -327,7 +395,7 @@ export default function IssueEntry() {
       })
       setSourceFiles(filesMeta)
       // 批内去重：归一化标题（去空白标点）相同的条目只保留首条勾选，其余默认跳过（多文件导入时同一问题常在 PPT 与 Word 汇总表重复出现）
-      const normTitle = (t: string) => t.toLowerCase().replace(/[\s　，。、；：""''（）()【】《》<>「」\-—·.!！?？]/g, '')
+      const normTitle = (t: string) => t.toLowerCase().replace(/[\s\u3000，。、；：""''（）()【】《》<>「」\-—·.!！?？]/g, '')
       const seenTitles = new Map<string, string>()
       const intra: Record<string, string> = {}
       const dedupedDrafts = withTags.map((d) => {
@@ -384,11 +452,19 @@ export default function IssueEntry() {
 
   const confirmImport = async () => {
     if (!sourceFiles.length || importing) return
-    const accepted = drafts.filter((d) => d.accepted)
-    const acceptedReviews = reviews.filter((r) => r.accepted && r.matchedIssueId)
+    // 把服务端请求所需的缺失时间一次性写回草稿；照片路径上传后也写回，保证跨重试/刷新 hash 稳定。
+    const fallbackTime = new Date().toISOString()
+    const stableDrafts = drafts.map((d) => d.foundAtGuess ? d : { ...d, foundAtGuess: fallbackTime })
+    const stableReviews = reviews.map((r) => r.closedAtGuess ? r : { ...r, closedAtGuess: fallbackTime })
+    if (stableDrafts.some((d, i) => d !== drafts[i])) setDrafts(stableDrafts)
+    if (stableReviews.some((r, i) => r !== reviews[i])) setReviews(stableReviews)
+    const accepted = stableDrafts.filter((d) => d.accepted)
+    const acceptedReviews = stableReviews.filter((r) => r.accepted && r.matchedIssueId)
     if (!accepted.length && !acceptedReviews.length) return
     // 文件名 → 解析类型映射（批量导入时各文件类型可能不同）
     const sourceOf = (name?: string) => sourceFiles.find((f) => f.name === name)?.source ?? 'pptx'
+    const batchKey = idempotencyKey ?? crypto.randomUUID()
+    if (!idempotencyKey) setIdempotencyKey(batchKey)
     setImporting(true)
     setUploadDone(0)
     setImportTotal(accepted.length)
@@ -412,10 +488,13 @@ export default function IssueEntry() {
         }
         const items = await runPool(
           accepted.map((d) => async () => {
-            const foundAt = d.foundAtGuess ?? new Date().toISOString()
+            const foundAt = d.foundAtGuess!
             const managed = isManagedWorkshop(d.locationGuess)
-            // 先上传该页提取的现场照片，再把路径随隐患入库
-            const photos = d.photos?.length ? await uploadPhotos(d.photos.slice(0, 9)) : []
+            const cached = (d as DraftWithUpload).uploadedPhotoPaths
+            const photos = cached ?? (d.photos?.length ? await uploadPhotos(d.photos.slice(0, 9)) : [])
+            if (!cached) {
+              setDrafts((current) => current.map((item) => item.key === d.key ? { ...item, uploadedPhotoPaths: photos } : item))
+            }
             return {
               title: d.title.trim() || '未命名隐患',
               description: d.description,
@@ -452,26 +531,31 @@ export default function IssueEntry() {
           }),
           4,
         )
-        addIssues(items)
+        await addIssues(items, batchKey)
       }
       // 复查核销：闭环命中的隐患，整改记录注明核销依据；整改后照片一并追加
       for (const r of acceptedReviews) {
         const target = issues.find((i) => i.id === r.matchedIssueId)
-        const added = r.photos?.length ? await uploadPhotos(r.photos.slice(0, 9)) : []
-        updateIssue(r.matchedIssueId!, {
-          status: 'closed',
-          closedAt: r.closedAtGuess ?? new Date().toISOString(),
+        const cached = (r as ReviewWithUpload).uploadedPhotoPaths
+        const added = cached ?? (r.photos?.length ? await uploadPhotos(r.photos.slice(0, 9)) : [])
+        if (!cached) {
+          setReviews((current) => current.map((item) => item.key === r.key ? { ...item, uploadedPhotoPaths: added } : item))
+        }
+        await closeIssue(r.matchedIssueId!, {
+          closedAt: r.closedAtGuess!,
           fixNote: `复查核销：据《${r.fileName ?? sourceFiles[0]?.name}》复查页，${r.conclusion}`,
           photos: [...(target?.photos ?? []), ...added].slice(0, 9),
         })
       }
-      // 成功标识：先在按钮处亮绿勾停留 1.4 秒，让用户确认入库结果，再清空跳转
+      // 所有服务端操作均成功并返回后，才允许清除持久化草稿、显示成功并跳转
+      await persistSnapshot({ drafts: [], reviews: [], sourceFiles: [], skipped: [], idempotencyKey: null })
       setImportOk(true)
       await new Promise((r) => setTimeout(r, 1400))
       setDrafts([])
       setReviews([])
       setSkipped([])
       setSourceFiles([])
+      setIdempotencyKey(null)
       setDupByKey({})
       setDupOpen(null)
       clearPhotoUrls()
@@ -845,6 +929,7 @@ export default function IssueEntry() {
           </section>
 
           {/* 提交 */}
+          {submitError && <div className="px-4 py-2.5 rounded-xl bg-[#FF3B30]/10 text-[#D70015] text-[13px]">{submitError}</div>}
           <div className="flex items-center justify-end gap-4 pb-2">
             {/* 正面典型：做得好的做法，不进整改闭环，自动沉淀到知识库「好做法」 */}
             <button

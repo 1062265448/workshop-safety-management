@@ -100,7 +100,10 @@ docker exec wsms-app node dist/seed.js   # 首次全新部署：初始化管理�
 
 | 资源 | 端点 |
 |------|------|
-| 隐患 | `GET/POST /api/issues`、`GET/PATCH/DELETE /api/issues/:id`、`POST /api/issues/batch`（导入暂存区批量入库），支持 `?status=&categoryId=&locationId=&q=` 筛选 |
+| 隐患 | `GET/POST /api/issues`、`GET/PATCH/DELETE /api/issues/:id`（PATCH 仅修改资料字段），支持 `?status=&categoryId=&locationId=&q=` 筛选 |
+| 隐患闭环 | `POST /api/issues/:id/status`（pending → fixing → review）、`POST /api/issues/:id/reviewed`、`POST /api/issues/:id/recheck`、`POST /api/issues/:id/stage/next`、`POST /api/issues/:id/close` |
+| 批量导入 | `POST /api/imports/batches`，提交 `{ items, idempotencyKey }`；相同幂等键回放原批次，旧 `/api/issues/batch` 已停用 |
+| 只读 Agent | `GET /api/agent/capabilities`、`POST /api/agent/runs`、`GET /api/agent/runs/:id`；最多 6 步 / 3 次模型调用 / 45 秒，保存模型、工具和验收轨迹，不写业务表 |
 | 标签 | `GET/POST /api/tags`、`PATCH/DELETE /api/tags/:id`（内置标签不可删，删除自动清理引用） |
 | 检查计划 | `GET/POST /api/plans`、`PATCH/DELETE /api/plans/:id` |
 | 提醒 | `GET /api/reminders`、`POST /api/reminders/refresh`（幂等派生：整改超期 + 计划到点）、`PATCH /api/reminders/:id/read|done` |

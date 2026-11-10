@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { BookOpen, BookMarked, Search, Loader2, Sparkles, RefreshCw, CircleAlert, Settings2, ChevronDown, ChevronUp, FileText, History, X } from 'lucide-react'
+import { BookMarked, Search, Loader2, Sparkles, RefreshCw, CircleAlert, FileText, History, X } from 'lucide-react'
 import { Link } from 'react-router'
 import { getCurrentUser } from '@/lib/auth'
 import { diffLines, type DiffLine } from '@/lib/diffLines'
@@ -7,10 +7,8 @@ import { REG_CATEGORY_META, REG_CATEGORY_ORDER } from '@/components/badges'
 import type { KnowledgeDocDetail, KnowledgeDocItem, KnowledgeDocVersionItem, PrelabelStats, Regulation } from '@/types'
 
 // ─────────────────────────────────────────────────────────────
-// 知识库：语义检索车间历史隐患、参考标注与督查通报原文
-// AI 问答预留 DeepSeek（管理员在页面「API 配置」里填 Key 即启用）
-// 重建索引为后台任务，前端轮询进度条
-// 页签：智能问答 / 法规制度（只读浏览）/ 文档管理（编辑 + 版本历史 diff）
+// 知识检索的资料检索、法规制度与文档管理视图。
+// 页签、模型配置与 Agent 联动由 KnowledgeHub 统一承载。
 // ─────────────────────────────────────────────────────────────
 
 interface KnowledgeStatus {
@@ -36,12 +34,6 @@ interface AskResult {
   model: string
 }
 
-interface LlmConfigView {
-  baseUrl: string
-  model: string
-  apiKeySet: boolean
-}
-
 interface ReindexJob {
   running: boolean
   total: number
@@ -49,6 +41,14 @@ interface ReindexJob {
   docs: number
   error: string
   finishedAt: string | null
+}
+
+export type KnowledgeView = 'ask' | 'regs' | 'docs'
+
+interface KnowledgeProps {
+  tab: KnowledgeView
+  onAnalyze: (question: string) => void
+  configVersion: number
 }
 
 const KIND_META: Record<string, { label: string; cls: string }> = {
@@ -73,8 +73,7 @@ function fmtTime(iso: string) {
   return iso.slice(0, 16).replace('T', ' ')
 }
 
-export default function Knowledge() {
-  const [tab, setTab] = useState<'ask' | 'regs' | 'docs'>('ask')
+export default function Knowledge({ tab, onAnalyze, configVersion }: KnowledgeProps) {
   const [status, setStatus] = useState<KnowledgeStatus | null>(null)
   const [q, setQ] = useState('')
   const [loading, setLoading] = useState(false)
@@ -85,13 +84,6 @@ export default function Knowledge() {
   // 重建索引（后台任务 + 进度轮询）
   const [job, setJob] = useState<ReindexJob | null>(null)
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  // API 配置卡
-  const [cfgOpen, setCfgOpen] = useState(false)
-  const [cfg, setCfg] = useState<LlmConfigView | null>(null)
-  const [cfgForm, setCfgForm] = useState({ apiKey: '', baseUrl: '', model: '' })
-  const [cfgSaving, setCfgSaving] = useState(false)
-  const [cfgMsg, setCfgMsg] = useState('')
 
   // AI 预标注人工改动率（改动率高说明 AI 口径与人工偏差大，可多设范例）
   const [prelabelStats, setPrelabelStats] = useState<PrelabelStats | null>(null)
@@ -119,10 +111,6 @@ export default function Knowledge() {
   const loadStatus = () => api<KnowledgeStatus>('/knowledge/status').then(setStatus).catch(() => setStatus(null))
   useEffect(() => {
     loadStatus()
-    api<LlmConfigView>('/knowledge/config').then((c) => {
-      setCfg(c)
-      setCfgForm({ apiKey: '', baseUrl: c.baseUrl, model: c.model })
-    }).catch(() => undefined)
     // 进入页面时若后台正在重建，接上进度轮询
     api<ReindexJob>('/knowledge/reindex/status').then((j) => {
       if (j.running) { setJob(j); startPolling() }
@@ -131,6 +119,10 @@ export default function Knowledge() {
     return () => { if (pollTimer.current) clearInterval(pollTimer.current) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    if (configVersion > 0) void loadStatus()
+  }, [configVersion])
 
   // 法规制度页签：首次进入加载，关键词停顿 300ms 后检索
   useEffect(() => {
@@ -195,31 +187,6 @@ export default function Knowledge() {
       startPolling()
     } catch {
       setError('重建索引启动失败')
-    }
-  }
-
-  const saveConfig = async () => {
-    if (cfgSaving) return
-    setCfgSaving(true)
-    setCfgMsg('')
-    try {
-      const saved = await api<LlmConfigView>('/knowledge/config', {
-        method: 'PUT',
-        body: JSON.stringify({
-          apiKey: cfgForm.apiKey || undefined, // 留空 = 不改动
-          baseUrl: cfgForm.baseUrl,
-          model: cfgForm.model,
-        }),
-      })
-      setCfg(saved)
-      setCfgForm((f) => ({ ...f, apiKey: '' }))
-      setCfgMsg('已保存')
-      loadStatus()
-      setTimeout(() => setCfgMsg(''), 3000)
-    } catch {
-      setCfgMsg('保存失败')
-    } finally {
-      setCfgSaving(false)
     }
   }
 
@@ -313,194 +280,81 @@ export default function Knowledge() {
   const reindexing = !!job?.running
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-6 space-y-5">
-      {/* 页头 */}
-      <div>
-        <h1 className="text-[22px] font-bold text-neutral-900 flex items-center gap-2">
-          <BookOpen size={22} className="text-[#007AFF]" /> 车间知识库
-        </h1>
-        <p className="mt-1 text-[13px] text-neutral-500">历年隐患、整改记录、督查通报与法规制度</p>
-      </div>
-
-      {/* 页签：智能问答 / 法规制度 / 文档管理 */}
-      <div className="flex gap-1 bg-neutral-200/60 p-1 rounded-xl w-fit">
-        {([['ask', '智能问答'], ['regs', '法规制度'], ['docs', '文档管理']] as const).map(([key, label]) => (
-          <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={`px-4 py-1.5 rounded-lg text-[13px] transition-colors ${tab === key ? 'bg-white shadow-sm font-medium' : 'text-neutral-500'}`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
+    <div className="mx-auto max-w-3xl space-y-5">
       {tab === 'ask' && (
         <>
-          {/* 状态卡 */}
+          {/* 知识索引状态与管理员维护入口 */}
           {status && (
-            <div className="rounded-2xl bg-white p-4 shadow-sm border border-neutral-100 text-[13px] text-neutral-600 flex flex-wrap items-center gap-x-5 gap-y-2">
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-2xl border border-neutral-100 bg-white p-4 text-[13px] text-neutral-600 shadow-sm">
               <span>文档 <b className="text-neutral-900">{status.docs}</b> 篇</span>
-              <span>切片 <b className="text-neutral-900">{status.chunks}</b> 段</span>
-              <span>
-                嵌入模型{status.modelReady
-                  ? <span className="text-[#34C759] font-medium">已就绪</span>
-                  : <span className="text-[#FF3B30] font-medium">未就绪</span>}
+              <span>知识片段 <b className="text-neutral-900">{status.chunks}</b> 段</span>
+              <span>检索模型{status.modelReady
+                ? <span className="font-medium text-[#248A3D]">已就绪</span>
+                : <span className="font-medium text-[#D70015]">未就绪</span>}
               </span>
-              <span>
-                AI 回答{status.llm.configured
-                  ? <span className="text-[#34C759] font-medium">已启用（{status.llm.model}）</span>
-                  : <span className="text-neutral-400">未配置 Key，仅检索</span>}
+              <span>智能整理{status.llm.configured
+                ? <span className="font-medium text-[#248A3D]">已启用</span>
+                : <span className="text-neutral-400">未启用，仅返回原文</span>}
               </span>
               {isAdmin && (
-                <div className="ml-auto flex items-center gap-2">
-                  <button
-                    onClick={() => setCfgOpen((v) => !v)}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-neutral-200 px-3 py-1.5 text-[12px] text-neutral-600 hover:bg-neutral-50"
-                  >
-                    <Settings2 size={13} /> API 配置 {cfgOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                  </button>
-                  <button
-                    onClick={reindex}
-                    disabled={reindexing}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-neutral-200 px-3 py-1.5 text-[12px] text-neutral-600 hover:bg-neutral-50 disabled:opacity-50"
-                  >
-                    {reindexing ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-                    {reindexing ? '重建中…' : '重建索引'}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={reindex}
+                  disabled={reindexing}
+                  className="ml-auto inline-flex min-h-9 items-center gap-1.5 rounded-full border border-neutral-200 px-3 py-1.5 text-[12px] text-neutral-600 hover:bg-neutral-50 disabled:opacity-50"
+                >
+                  {reindexing ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                  {reindexing ? '重建中…' : '重建索引'}
+                </button>
               )}
-            </div>
-          )}
-
-          {/* AI 预标注改动率：改动率高说明 AI 口径与人工偏差大，可多设范例 */}
-          {prelabelStats && prelabelStats.total > 0 && (
-            <div className="rounded-2xl bg-white p-4 shadow-sm border border-neutral-100 text-[13px] text-neutral-600 flex flex-wrap items-center gap-x-5 gap-y-2">
-              <span className="font-medium text-neutral-800">AI 预标注改动率</span>
-              <span>已预标注 <b className="text-neutral-900">{prelabelStats.total}</b> 条</span>
-              <span>人工改判 <b className="text-neutral-900">{prelabelStats.changed}</b> 条</span>
-              <span>
-                改动率{' '}
-                <b className={prelabelStats.rate >= 0.3 ? 'text-[#B25000]' : 'text-[#248A3D]'}>
-                  {(prelabelStats.rate * 100).toFixed(0)}%
-                </b>
-              </span>
-              <span className="text-[12px] text-neutral-400 ml-auto">
-                改动率高说明 AI 口径与人工偏差大，可在问题库详情把已复核条目「设为 AI 范例」
-              </span>
             </div>
           )}
 
           {/* 重建进度条 */}
           {job && (job.running || job.error || job.finishedAt) && (
-            <div className="rounded-2xl bg-white p-4 shadow-sm border border-neutral-100">
+            <div className="rounded-2xl border border-neutral-100 bg-white p-4 shadow-sm">
               {job.running ? (
                 <>
-                  <div className="flex justify-between text-[12px] text-neutral-500 mb-2">
+                  <div className="mb-2 flex justify-between text-[12px] text-neutral-500">
                     <span>正在重建索引（{job.docs} 篇文档）…</span>
                     <span>{job.done} / {job.total || '…'}</span>
                   </div>
-                  <div className="h-1.5 rounded-full bg-neutral-100 overflow-hidden">
-                    <div
-                      className="h-full bg-[#007AFF] transition-all duration-500"
-                      style={{ width: job.total ? `${Math.round((job.done / job.total) * 100)}%` : '8%' }}
-                    />
+                  <div className="h-1.5 overflow-hidden rounded-full bg-neutral-100">
+                    <div className="h-full bg-[#007AFF] transition-all duration-500" style={{ width: job.total ? `${Math.round((job.done / job.total) * 100)}%` : '8%' }} />
                   </div>
                 </>
               ) : job.error ? (
                 <div className="text-[13px] text-[#D70015]">重建失败：{job.error}</div>
               ) : (
-                <div className="text-[13px] text-[#34C759]">重建完成：{job.docs} 篇文档、{job.done} 个切片</div>
+                <div className="text-[13px] text-[#248A3D]">重建完成：{job.docs} 篇文档、{job.done} 个知识片段</div>
               )}
             </div>
           )}
 
-          {/* API 配置卡（管理员） */}
-          {isAdmin && cfgOpen && cfg && (
-            <div className="rounded-2xl bg-white p-5 shadow-sm border border-neutral-100 space-y-3">
-              <div className="text-[14px] font-medium text-neutral-900">大模型 API 配置</div>
-              <p className="text-[12px] text-neutral-500">
-                默认对接 DeepSeek（OpenAI 兼容协议）。填入 Key 后 AI 回答立即启用，无需重启。
-              </p>
-              <div>
-                <label className="text-[12px] text-neutral-500 block mb-1">API Key{cfg.apiKeySet && '（已配置，输入新值则更换）'}</label>
-                <input
-                  type="password"
-                  value={cfgForm.apiKey}
-                  onChange={(e) => setCfgForm((f) => ({ ...f, apiKey: e.target.value }))}
-                  placeholder={cfg.apiKeySet ? '••••••••' : 'sk-…'}
-                  className="w-full rounded-xl bg-neutral-50 px-3.5 py-2.5 text-[13px] outline-none focus:bg-neutral-100"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[12px] text-neutral-500 block mb-1">接口地址</label>
-                  <input
-                    value={cfgForm.baseUrl}
-                    onChange={(e) => setCfgForm((f) => ({ ...f, baseUrl: e.target.value }))}
-                    className="w-full rounded-xl bg-neutral-50 px-3.5 py-2.5 text-[13px] outline-none focus:bg-neutral-100"
-                  />
-                </div>
-                <div>
-                  <label className="text-[12px] text-neutral-500 block mb-1">模型</label>
-                  <input
-                    value={cfgForm.model}
-                    onChange={(e) => setCfgForm((f) => ({ ...f, model: e.target.value }))}
-                    className="w-full rounded-xl bg-neutral-50 px-3.5 py-2.5 text-[13px] outline-none focus:bg-neutral-100"
-                  />
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={saveConfig}
-                  disabled={cfgSaving}
-                  className="rounded-xl bg-[#007AFF] px-5 py-2.5 text-[13px] font-medium text-white disabled:opacity-40"
-                >
-                  {cfgSaving ? '保存中…' : '保存'}
-                </button>
-                {cfg.apiKeySet && (
-                  <button
-                    onClick={async () => {
-                      if (cfgSaving) return
-                      setCfgSaving(true)
-                      try {
-                        const saved = await api<LlmConfigView>('/knowledge/config', { method: 'PUT', body: JSON.stringify({ clearApiKey: true }) })
-                        setCfg(saved)
-                        setCfgMsg('已清除 Key，AI 回答已停用')
-                        loadStatus()
-                        setTimeout(() => setCfgMsg(''), 3000)
-                      } finally {
-                        setCfgSaving(false)
-                      }
-                    }}
-                    className="text-[12px] text-neutral-400 hover:text-[#D70015]"
-                  >
-                    清除 Key
-                  </button>
-                )}
-                {cfgMsg && <span className={`text-[12px] ${cfgMsg === '已保存' || cfgMsg.startsWith('已清除') ? 'text-[#34C759]' : 'text-[#D70015]'}`}>{cfgMsg}</span>}
-              </div>
+          <form
+            onSubmit={(event) => { event.preventDefault(); void ask() }}
+            className="rounded-2xl border border-neutral-100 bg-white p-4 shadow-sm"
+          >
+            <label htmlFor="knowledge-search-input" className="text-[14px] font-medium text-neutral-800">查找知识原文</label>
+            <p className="mt-1 text-[12px] leading-5 text-neutral-400">检索历史隐患、整改记录、督查通报与规程制度</p>
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+              <input
+                id="knowledge-search-input"
+                value={q}
+                onChange={(event) => setQ(event.target.value)}
+                placeholder="例如：配电箱没上锁有什么风险？以前出过类似问题吗？"
+                className="min-h-11 min-w-0 flex-1 rounded-xl bg-neutral-50 px-4 py-3 text-[14px] outline-none focus:bg-neutral-100 focus:ring-2 focus:ring-[#007AFF]/20"
+              />
+              <button
+                type="submit"
+                disabled={loading || !q.trim() || reindexing}
+                className="inline-flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-xl bg-[#007AFF] px-5 py-3 text-[14px] font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                {loading ? '正在检索…' : '检索资料'}
+              </button>
             </div>
-          )}
-
-          {/* 提问框 */}
-          <div className="rounded-2xl bg-white p-2 shadow-sm border border-neutral-100 flex items-center gap-2">
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && ask()}
-              placeholder="例如：配电箱没上锁有什么风险？以前出过类似问题吗？"
-              className="flex-1 rounded-xl bg-neutral-50 px-4 py-3 text-[14px] outline-none focus:bg-neutral-100"
-            />
-            <button
-              onClick={ask}
-              disabled={loading || !q.trim() || reindexing}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#007AFF] px-5 py-3 text-[14px] font-medium text-white disabled:opacity-40"
-            >
-              {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
-              提问
-            </button>
-          </div>
+          </form>
 
           {error && (
             <div className="rounded-xl bg-[#FF3B30]/8 px-4 py-3 text-[13px] text-[#D70015] flex items-center gap-2">
@@ -508,25 +362,33 @@ export default function Knowledge() {
             </div>
           )}
 
-          {/* AI 回答 */}
           {result?.answer && (
-            <div className="rounded-2xl bg-white p-5 shadow-sm border border-neutral-100">
-              <div className="flex items-center gap-1.5 text-[13px] font-medium text-[#007AFF] mb-2">
-                <Sparkles size={15} /> AI 回答（{result.model}）
+            <div className="rounded-2xl border border-neutral-100 bg-white p-5 shadow-sm">
+              <div className="mb-2 flex items-center gap-1.5 text-[13px] font-medium text-[#007AFF]">
+                <Sparkles size={15} /> 资料智能整理
               </div>
               <p className="whitespace-pre-wrap text-[14px] leading-7 text-neutral-800">{result.answer}</p>
             </div>
           )}
           {result && !result.llmConfigured && (
-            <div className="rounded-xl bg-neutral-50 px-4 py-3 text-[12px] text-neutral-500">
-              以下为知识库原文检索结果。配置 DeepSeek API Key 后，这里会直接给出整理好的回答。
+            <div className="rounded-xl bg-neutral-50 px-4 py-3 text-[12px] leading-5 text-neutral-500">
+              当前展示知识库原文。管理员启用模型配置后，可同时查看智能整理内容。
             </div>
           )}
 
-          {/* 检索结果 */}
+          {/* 检索结果可带入 Agent，但由用户确认后再提交 */}
           {result && result.hits.length > 0 && (
             <div className="space-y-3">
-              <div className="text-[13px] font-medium text-neutral-500">相关资料（{result.hits.length}）</div>
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="text-[13px] font-medium text-neutral-500">相关资料（{result.hits.length}）</div>
+                <button
+                  type="button"
+                  onClick={() => onAnalyze(q.trim())}
+                  className="ml-auto inline-flex min-h-9 items-center gap-1.5 rounded-full border border-[#007AFF]/20 px-3 py-1.5 text-[12px] font-medium text-[#007AFF] hover:bg-[#007AFF]/5"
+                >
+                  <Sparkles size={13} /> 交给 Agent 继续分析
+                </button>
+              </div>
               {result.hits.map((h, i) => {
                 const meta = KIND_META[h.kind] ?? { label: h.kind, cls: 'bg-neutral-100 text-neutral-500' }
                 return (
@@ -606,6 +468,15 @@ export default function Knowledge() {
       {/* ── 文档管理页签：文档列表 + 编辑 + 版本历史 ── */}
       {tab === 'docs' && (
         <div className="space-y-4">
+          {prelabelStats && prelabelStats.total > 0 && (
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-2xl border border-neutral-100 bg-white p-4 text-[13px] text-neutral-600 shadow-sm">
+              <span className="font-medium text-neutral-800">预标注质量</span>
+              <span>已预标注 <b className="text-neutral-900">{prelabelStats.total}</b> 条</span>
+              <span>人工改判 <b className="text-neutral-900">{prelabelStats.changed}</b> 条</span>
+              <span>改动率 <b className={prelabelStats.rate >= 0.3 ? 'text-[#B25000]' : 'text-[#248A3D]'}>{(prelabelStats.rate * 100).toFixed(0)}%</b></span>
+              <span className="text-[12px] leading-5 text-neutral-400">改动率较高时，可在问题库将已复核条目设为预标注范例</span>
+            </div>
+          )}
           {!docDetail ? (
             <>
               <div className="rounded-2xl bg-white p-2 shadow-sm border border-neutral-100 flex items-center gap-2">
@@ -623,7 +494,7 @@ export default function Knowledge() {
                 </div>
               ) : docList.length === 0 ? (
                 <div className="rounded-2xl bg-white p-8 text-center text-[13px] text-neutral-400 shadow-sm border border-neutral-100">
-                  没有文档。先在「智能问答」页由管理员「重建索引」。
+                  没有文档。请先在「资料检索」页由管理员「重建索引」。
                 </div>
               ) : (
                 <div className="rounded-2xl bg-white shadow-sm border border-neutral-100 divide-y divide-neutral-100">

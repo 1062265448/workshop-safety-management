@@ -1,19 +1,19 @@
 // ─────────────────────────────────────────────────────────────
 // 钉钉通报自动导入：每天 07:40 从「班组安全综治工作联络群」拉取厂督查通报，
 // 下载 → 服务端解析（server-parser）→ 自动建档标签 → 库内查重（≥75% 同题跳过）
-// → 批量入库（成品车间自动纳入闭环，其他车间仅参考）→ 台账记录（messageId 幂等）
+// → 独立批次入库（成品车间自动纳入闭环，其他车间仅参考）→ 台账记录 → 文件归档
 // 设计要点：
-//   - 幂等：dingtalk_imports 表按 messageId 唯一约束，同一通报永不重复导入
-//   - 健壮：单个文件失败只记台账不中断整批；dws 调用超时兜底
+//   - 幂等：ImportBatch 使用 dingtalk:messageId，台账前崩溃重跑也只回放原批次
+//   - 健壮：单文件业务失败记台账；台账后的归档失败只告警，不触发业务重跑
 //   - 通知：导入完成后向群里发一条结果汇报（发送失败不影响导入结果）
 // 配置走环境变量：DINGTALK_GROUP（群名）、DINGTALK_PRELABEL=1 开启 AI 预标注
 // ─────────────────────────────────────────────────────────────
-import { Body, Controller, Get, Injectable, Module, Post } from '@nestjs/common'
+import { Body, Controller, Get, Injectable, Module, Post, ServiceUnavailableException } from '@nestjs/common'
 import { execFile } from 'child_process'
 import { readFileSync, renameSync, existsSync, mkdirSync } from 'fs'
-import { join } from 'path'
+import { delimiter, join } from 'path'
 import { PrismaService } from '../../prisma.service'
-import { IssuesModule, IssuesService } from '../issues/issues.module'
+import { ImportsModule, ImportService } from '../imports/imports.module'
 import { KnowledgeModule, KnowledgeService, dupMetaVerdict } from '../knowledge/knowledge.module'
 import { PrelabelModule, PrelabelService } from '../issues/prelabel.module'
 import { Roles } from '../auth/auth.module'
@@ -31,21 +31,48 @@ const BULLETIN_RE = /通报.*\.pptx$/i
 /** 整改期限（天）：与前端 IssueEntry 一致 */
 const DEADLINE_DAYS: Record<string, number> = { critical: 3, general: 15, immediate: 0 }
 
+export interface DingtalkAvailability {
+  enabled: boolean
+  configured: boolean
+  available: boolean
+  executor: 'windows-cmd' | 'direct' | 'none'
+  reason: string
+}
+
+/** 非 Windows 只有显式 DINGTALK_EXECUTOR 或 DWS_CMD 才可执行，且不得调用 cmd.exe。 */
+export function getDingtalkAvailability(platform = process.platform, env: NodeJS.ProcessEnv = process.env): DingtalkAvailability {
+  const enabled = !/^(false|0|off)$/i.test(env.DINGTALK_ENABLED?.trim() || '')
+  if (!enabled) return { enabled, configured: false, available: false, executor: 'none', reason: 'DINGTALK_ENABLED=false，钉钉同步已禁用' }
+  if (platform === 'win32') return { enabled, configured: true, available: true, executor: 'windows-cmd', reason: '' }
+  const direct = (env.DINGTALK_EXECUTOR || env.DWS_CMD || '').trim()
+  if (!direct) return { enabled, configured: false, available: false, executor: 'none', reason: '当前非 Windows 平台未配置 DINGTALK_EXECUTOR，钉钉执行器不可用' }
+  return { enabled, configured: true, available: true, executor: 'direct', reason: '' }
+}
+
+const AVAILABILITY = getDingtalkAvailability()
+const DIRECT_EXECUTOR = (process.env.DINGTALK_EXECUTOR || process.env.DWS_CMD || '').trim()
 const INBOX = join(process.cwd(), 'inbox')
 const INBOX_DONE = join(INBOX, 'done')
 if (!existsSync(INBOX_DONE)) mkdirSync(INBOX_DONE, { recursive: true })
 
-/** 今天 07:40 是否已跑过（跨零点重置） */
 let lastRunDate = ''
 
-/** 执行 dws 命令并解析 JSON 输出（cwd 固定为后端目录，保证下载相对路径落 inbox）
- *  Node 不能直接用 execFile 跑 .cmd（EINVAL），必须经 cmd.exe /c 包装。
- *  引号规则很刁钻：cmd /c 会剥掉整串的首尾引号，首令牌（dws 路径无空格）不能加引号，
- *  否则会被当成带引号的程序名报"不是内部或外部命令"；只有含空格的参数才加引号 */
+/** Windows 经 cmd.exe 执行 .cmd；其他平台只用直接参数数组，无 shell 拼接。 */
 function runDws(args: string[], timeout = 10 * 60_000): Promise<unknown> {
-  const cmdline = `${DWS_CMD} ${args.map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')}`
+  if (!AVAILABILITY.available) return Promise.reject(new Error(AVAILABILITY.reason))
+  const windows = AVAILABILITY.executor === 'windows-cmd'
+  const command = windows ? 'cmd.exe' : DIRECT_EXECUTOR
+  const commandArgs = windows
+    ? ['/d', '/c', `${DWS_CMD} ${args.map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')}`]
+    : args
   return new Promise((resolve, reject) => {
-    execFile('cmd.exe', ['/d', '/c', cmdline], { cwd: process.cwd(), windowsHide: true, timeout, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, PATH: `${process.env.PATH};${NODE_DIR}` } }, (err, stdout, stderr) => {
+    execFile(command, commandArgs, {
+      cwd: process.cwd(),
+      windowsHide: true,
+      timeout,
+      maxBuffer: 32 * 1024 * 1024,
+      env: { ...process.env, PATH: `${process.env.PATH || ''}${delimiter}${NODE_DIR}` },
+    }, (err, stdout, stderr) => {
       if (err) return reject(new Error(`dws ${args[0]} ${args[1] ?? ''} 失败：${(stderr || String(err)).slice(0, 300)}`))
       try {
         resolve(JSON.parse(stdout))
@@ -69,15 +96,19 @@ export class DingtalkService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly issues: IssuesService,
+    private readonly imports: ImportService,
     private readonly knowledge: KnowledgeService,
     private readonly prelabel: PrelabelService,
   ) {}
 
   onModuleInit() {
+    if (!AVAILABILITY.available) {
+      console.warn(`[dingtalk] 定时同步未调度：${AVAILABILITY.reason}`)
+      return
+    }
     const timer = setInterval(() => this.tick(), 60_000)
     timer.unref()
-    console.log(`[dingtalk] 通报自动导入已调度：每天 ${String(RUN_HOUR).padStart(2, '0')}:${String(RUN_MINUTE).padStart(2, '0')}，群「${GROUP}」`)
+    console.log(`[dingtalk] 通报自动导入已调度：每天 ${String(RUN_HOUR).padStart(2, '0')}:${String(RUN_MINUTE).padStart(2, '0')}，群「${GROUP}」，执行器 ${AVAILABILITY.executor}`)
   }
 
   private tick() {
@@ -86,7 +117,11 @@ export class DingtalkService {
     const today = now.toISOString().slice(0, 10)
     if (lastRunDate === today) return
     lastRunDate = today
-    void this.run('定时').catch(() => {})
+    if (!AVAILABILITY.available) {
+      console.warn(`[dingtalk] 定时同步已跳过：${AVAILABILITY.reason}`)
+      return
+    }
+    void this.run('定时').catch((error) => console.error(`[dingtalk] 定时同步失败：${(error as Error).message}`))
   }
 
   /** 拉群消息：筛出未导入过的通报文件消息 */
@@ -114,9 +149,11 @@ export class DingtalkService {
 
   /** 执行一轮同步；返回各文件导入结果 */
   async run(trigger: string): Promise<{ files: number; imported: number; issues: number; dups: number; message: string }> {
+    if (!AVAILABILITY.available) throw new ServiceUnavailableException(AVAILABILITY.reason)
     if (this.running) throw new Error('同步正在执行中，请稍后再试')
     this.running = true
     const summary = { files: 0, imported: 0, issues: 0, dups: 0, message: '' }
+    let hasFailures = false
     try {
       const bulletins = await this.fetchBulletins()
       if (!bulletins.length) {
@@ -156,7 +193,7 @@ export class DingtalkService {
             const r = await this.prelabel.prelabel(accepted.map((d) => ({ title: d.title, description: d.description, workshop: d.locationGuess })))
             ai = r.map((x) => (x.error || x.skipped ? null : x))
           }
-          // 6. 批量入库（字段口径与前端 confirmImport 一致）
+          // 6. 独立批次入库：messageId 贯穿重试，台账前崩溃也只会回放原批次。
           const items = accepted.map((d, i) => {
             const managed = !!d.locationGuess?.includes('成品')
             const foundAt = d.foundAtGuess ?? new Date().toISOString()
@@ -185,8 +222,16 @@ export class DingtalkService {
               aiRiskLevel: a?.riskLevel ?? null,
             }
           })
-          if (items.length) await this.issues.createBatch(items)
-          // 7. 台账（按 messageId 幂等：失败记录下次重跑时更新覆盖）+ 归档
+          const imported = items.length
+            ? await this.imports.createBatch({
+                items,
+                idempotencyKey: `dingtalk:${m.messageId}`,
+                externalMessageId: m.messageId,
+                source: 'dingtalk',
+              })
+            : null
+          const createdCount = imported?.createdCount ?? 0
+          // 7. 台账成功即代表业务导入完成；其后的文件归档失败不得触发业务失败重跑。
           await this.prisma.dingtalkImport.upsert({
             where: { messageId: m.messageId },
             create: {
@@ -194,23 +239,31 @@ export class DingtalkService {
               fileId: ref.resourceId,
               fileName: ref.name!,
               sizeBytes: dl.sizeBytes,
-              issueCount: items.length,
+              issueCount: createdCount,
               dupCount: parsed.drafts.length - accepted.length,
             },
             update: {
               fileId: ref.resourceId,
               fileName: ref.name!,
               sizeBytes: dl.sizeBytes,
-              issueCount: items.length,
+              issueCount: createdCount,
               dupCount: parsed.drafts.length - accepted.length,
               status: 'ok',
               error: null,
             },
           })
-          renameSync(local, join(INBOX_DONE, ref.name!))
+          try {
+            renameSync(local, join(INBOX_DONE, ref.name!))
+          } catch (e) {
+            hasFailures = true
+            const warning = `「${ref.name}」已入库并写入台账，但归档失败：${(e as Error).message.slice(0, 120)}；`
+            summary.message += warning
+            console.warn(`[dingtalk] ${warning}`)
+          }
           summary.imported++
-          summary.issues += items.length
+          summary.issues += createdCount
         } catch (e) {
+          hasFailures = true
           const err = (e as Error).message
           await this.prisma.dingtalkImport.upsert({
             where: { messageId: m.messageId },
@@ -229,7 +282,7 @@ export class DingtalkService {
       if (!summary.message) {
         summary.message = `新通报 ${summary.files} 个：入库 ${summary.issues} 条，查重跳过 ${summary.dups} 条`
       }
-      this.lastResult = { at: new Date().toISOString(), ok: true, message: `${trigger}：${summary.message}` }
+      this.lastResult = { at: new Date().toISOString(), ok: !hasFailures, message: `${trigger}：${summary.message}` }
       console.log(`[dingtalk] ${this.lastResult.message}`)
       // 结果汇报到群（发送失败不影响导入结果）
       void runDws(['chat', '+send-to-group', '--group', GROUP, '--content', `【通报导入】${summary.message}`], 60_000).catch(() => undefined)
@@ -241,7 +294,15 @@ export class DingtalkService {
 
   async status() {
     const records = await this.prisma.dingtalkImport.findMany({ orderBy: { createdAt: 'desc' }, take: 20 })
-    return { scheduled: `${String(RUN_HOUR).padStart(2, '0')}:${String(RUN_MINUTE).padStart(2, '0')}`, group: GROUP, prelabel: PRELABEL, running: this.running, lastResult: this.lastResult, records }
+    return {
+      scheduled: `${String(RUN_HOUR).padStart(2, '0')}:${String(RUN_MINUTE).padStart(2, '0')}`,
+      group: GROUP,
+      prelabel: PRELABEL,
+      ...AVAILABILITY,
+      running: this.running,
+      lastResult: this.lastResult,
+      records,
+    }
   }
 }
 
@@ -264,7 +325,7 @@ export class DingtalkController {
 }
 
 @Module({
-  imports: [IssuesModule, KnowledgeModule, PrelabelModule],
+  imports: [ImportsModule, KnowledgeModule, PrelabelModule],
   controllers: [DingtalkController],
   providers: [DingtalkService, PrismaService],
 })
