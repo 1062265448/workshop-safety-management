@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type Keyboard
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
+  BarChart3,
   Bot,
   BrainCircuit,
   CheckCircle2,
@@ -18,6 +19,7 @@ import {
   Sparkles,
   Square,
   Wrench,
+  X,
 } from 'lucide-react'
 import { api } from '@/lib/store'
 import { getCurrentUser } from '@/lib/auth'
@@ -346,6 +348,219 @@ function formatTime(iso: string) {
   return Number.isNaN(date.getTime()) ? humanizeText(iso) : date.toLocaleString('zh-CN', { hour12: false })
 }
 
+type DataRecord = Record<string, unknown>
+
+function asDataRecord(value: unknown): DataRecord | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as DataRecord : null
+}
+
+function numericValue(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function readableNumber(value: number) {
+  return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 }).format(value)
+}
+
+interface DistributionRow {
+  label: string
+  value: number
+  color: string
+}
+
+function DistributionBars({ title, rows }: { title: string; rows: DistributionRow[] }) {
+  const maximum = Math.max(1, ...rows.map((row) => row.value))
+  return (
+    <section aria-label={title}>
+      <h4 className="text-[13px] font-semibold text-neutral-800">{title}</h4>
+      <div className="mt-4 space-y-3.5">
+        {rows.map((row) => (
+          <div key={row.label} className="grid grid-cols-[58px_minmax(0,1fr)_38px] items-center gap-3 text-[12px]">
+            <span className="text-neutral-500">{row.label}</span>
+            <div className="h-2.5 overflow-hidden rounded-full bg-neutral-100" aria-hidden="true">
+              <div
+                className={`h-full rounded-full ${row.color} motion-safe:transition-[width] motion-safe:duration-300`}
+                style={{ width: `${row.value ? Math.max(4, row.value / maximum * 100) : 0}%` }}
+              />
+            </div>
+            <span className="text-right font-medium tabular-nums text-neutral-800">{readableNumber(row.value)}</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function MetricResult({ data, index }: { data: DataRecord; index: number }) {
+  const total = numericValue(data.total)
+  const closed = numericValue(data.closed)
+  const open = numericValue(data.open)
+  const overdue = numericValue(data.overdue)
+  const discoveredRate = numericValue(data.discoveredClosureRate)
+  const legacyRate = numericValue(data.closureRate)
+  const closureRate = discoveredRate ?? (legacyRate === null ? null : legacyRate * 100)
+  const cards = [
+    { label: '隐患总数', value: total, unit: '条', color: 'text-neutral-900' },
+    { label: '已闭环', value: closed, unit: '条', color: 'text-[#248A3D]' },
+    { label: '未闭环', value: open, unit: '条', color: 'text-[#B25000]' },
+    { label: '闭环率', value: closureRate, unit: '%', color: 'text-[#007AFF]' },
+  ].filter((card) => card.value !== null)
+  const byStatus = asDataRecord(data.byStatus)
+  const statusRows: DistributionRow[] = byStatus
+    ? [
+        { label: '待整改', value: numericValue(byStatus.pending) ?? 0, color: 'bg-[#FF9500]' },
+        { label: '整改中', value: numericValue(byStatus.fixing) ?? 0, color: 'bg-[#007AFF]' },
+        { label: '待复查', value: numericValue(byStatus.review) ?? 0, color: 'bg-neutral-400' },
+        { label: '已闭环', value: numericValue(byStatus.closed) ?? closed ?? 0, color: 'bg-[#34C759]' },
+      ]
+    : [
+        { label: '已闭环', value: closed ?? 0, color: 'bg-[#34C759]' },
+        { label: '未闭环', value: open ?? 0, color: 'bg-[#FF9500]' },
+      ]
+  const byRiskLevel = asDataRecord(data.byRiskLevel)
+  const riskRows: DistributionRow[] = [
+    { label: '一般', value: numericValue(byRiskLevel?.general) ?? 0, color: 'bg-[#34C759]' },
+    { label: '重大', value: numericValue(byRiskLevel?.major) ?? 0, color: 'bg-[#FF9500]' },
+    { label: '严重', value: numericValue(byRiskLevel?.critical) ?? 0, color: 'bg-[#FF3B30]' },
+    { label: '立即处理', value: numericValue(byRiskLevel?.immediate) ?? 0, color: 'bg-neutral-800' },
+  ]
+  const tableRows = [
+    { label: '隐患总数', value: total, unit: ' 条' },
+    { label: '已闭环', value: closed, unit: ' 条' },
+    { label: '未闭环', value: open, unit: ' 条' },
+    { label: '已超期', value: overdue, unit: ' 条' },
+    { label: '发现闭环率', value: closureRate, unit: '%' },
+    { label: '到期任务', value: numericValue(data.dueTotal), unit: ' 条' },
+    { label: '按期闭环', value: numericValue(data.dueClosedOnTime), unit: ' 条' },
+    { label: '按期闭环率', value: numericValue(data.dueClosureRate), unit: '%' },
+  ].filter((row) => row.value !== null)
+  const period = asDataRecord(data.period)
+  const start = typeof period?.start === 'string' ? period.start : ''
+  const end = typeof period?.end === 'string' ? period.end : ''
+  const scope = typeof data.scope === 'string' ? TRACE_VALUE_LABELS[data.scope] ?? data.scope : '本次查询范围'
+
+  return (
+    <section className="mt-7 border-t border-neutral-200 pt-6" aria-labelledby={`metric-result-${index}`}>
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <h4 id={`metric-result-${index}`} className="flex items-center gap-2 text-[15px] font-semibold text-neutral-900"><BarChart3 size={17} className="text-[#007AFF]" />统计概览{index > 0 ? ` ${index + 1}` : ''}</h4>
+          <p className="mt-1.5 text-[12px] leading-5 text-neutral-400">{scope}{start || end ? ` · ${start ? new Date(start).toLocaleDateString('zh-CN') : '最早记录'} 至 ${end ? new Date(end).toLocaleDateString('zh-CN') : '当前'}` : ''}</p>
+        </div>
+        <span className="text-[11px] text-neutral-400">来源：聚合安全指标</span>
+      </div>
+
+      {cards.length > 0 && (
+        <dl className="mt-5 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-neutral-200 bg-neutral-200 sm:grid-cols-4">
+          {cards.map((card) => (
+            <div key={card.label} className="bg-white px-4 py-4">
+              <dt className="text-[12px] text-neutral-500">{card.label}</dt>
+              <dd className={`mt-2 text-[25px] font-semibold leading-8 tabular-nums ${card.color}`}>
+                {readableNumber(card.value!)}<span className="ml-1 text-[12px] font-normal text-neutral-400">{card.unit}</span>
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      <div className={`mt-7 grid gap-7 ${byRiskLevel ? 'xl:grid-cols-2' : ''}`}>
+        <DistributionBars title="隐患状态分布" rows={statusRows} />
+        {byRiskLevel && <DistributionBars title="风险等级分布" rows={riskRows} />}
+      </div>
+
+      <div className="mt-7 overflow-x-auto">
+        <table className="w-full min-w-[320px] border-collapse text-left text-[13px]">
+          <caption className="mb-2 text-left font-semibold text-neutral-800">统计明细</caption>
+          <thead><tr className="border-y border-neutral-200 bg-neutral-50 text-[12px] text-neutral-500"><th className="px-3 py-2.5 font-medium">指标</th><th className="px-3 py-2.5 text-right font-medium">结果</th></tr></thead>
+          <tbody className="divide-y divide-neutral-100">
+            {tableRows.map((row) => <tr key={row.label}><td className="px-3 py-2.5 text-neutral-600">{row.label}</td><td className="px-3 py-2.5 text-right font-medium tabular-nums text-neutral-900">{readableNumber(row.value!)}{row.unit}</td></tr>)}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
+function IssueResultTable({ data, index }: { data: DataRecord; index: number }) {
+  const directItem = typeof data.title === 'string' ? data : null
+  const items = (Array.isArray(data.items) ? data.items : directItem ? [directItem] : []).map(asDataRecord).filter((item): item is DataRecord => Boolean(item))
+  const total = numericValue(data.total) ?? items.length
+  return (
+    <section className="mt-7 border-t border-neutral-200 pt-6" aria-labelledby={`issue-result-${index}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 id={`issue-result-${index}`} className="text-[14px] font-semibold text-neutral-900">隐患查询结果</h4>
+        <span className="text-[12px] text-neutral-400">共 {total} 条{items.length < total ? `，显示 ${items.length} 条` : ''}</span>
+      </div>
+      {items.length ? (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full min-w-[560px] border-collapse text-left text-[12px]">
+            <thead><tr className="border-y border-neutral-200 bg-neutral-50 text-neutral-500"><th className="px-3 py-2.5 font-medium">隐患内容</th><th className="px-3 py-2.5 font-medium">状态</th><th className="px-3 py-2.5 font-medium">风险等级</th><th className="px-3 py-2.5 font-medium">发现时间</th></tr></thead>
+            <tbody className="divide-y divide-neutral-100">
+              {items.map((item, itemIndex) => <tr key={String(item.id ?? itemIndex)}><td className="max-w-72 px-3 py-3 leading-5 text-neutral-800">{humanizeText(String(item.title ?? '未命名隐患'))}</td><td className="whitespace-nowrap px-3 py-3 text-neutral-600">{TRACE_VALUE_LABELS[String(item.status)] ?? humanizeText(String(item.status ?? '未记录'))}</td><td className="whitespace-nowrap px-3 py-3 text-neutral-600">{TRACE_VALUE_LABELS[String(item.riskLevel)] ?? humanizeText(String(item.riskLevel ?? '未记录'))}</td><td className="whitespace-nowrap px-3 py-3 text-neutral-500">{typeof item.foundAt === 'string' ? formatTime(item.foundAt) : '未记录'}</td></tr>)}
+            </tbody>
+          </table>
+        </div>
+      ) : <p className="mt-3 text-[13px] text-neutral-400">本次查询没有匹配的隐患记录。</p>}
+    </section>
+  )
+}
+
+function RegulationResultTable({ data, index }: { data: DataRecord; index: number }) {
+  const items = (Array.isArray(data.items) ? data.items : []).map(asDataRecord).filter((item): item is DataRecord => Boolean(item))
+  const total = numericValue(data.total) ?? items.length
+  return (
+    <section className="mt-7 border-t border-neutral-200 pt-6" aria-labelledby={`regulation-result-${index}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 id={`regulation-result-${index}`} className="text-[14px] font-semibold text-neutral-900">法规制度检索结果</h4>
+        <span className="text-[12px] text-neutral-400">共 {total} 条{items.length < total ? `，显示 ${items.length} 条` : ''}</span>
+      </div>
+      {items.length ? (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full min-w-[520px] border-collapse text-left text-[12px]">
+            <thead><tr className="border-y border-neutral-200 bg-neutral-50 text-neutral-500"><th className="px-3 py-2.5 font-medium">法规或制度名称</th><th className="px-3 py-2.5 font-medium">条款号</th><th className="px-3 py-2.5 font-medium">分类</th><th className="px-3 py-2.5 font-medium">更新时间</th></tr></thead>
+            <tbody className="divide-y divide-neutral-100">
+              {items.map((item, itemIndex) => <tr key={String(item.id ?? itemIndex)}><td className="max-w-72 px-3 py-3 leading-5 text-neutral-800">{humanizeText(String(item.title ?? '未命名资料'))}</td><td className="px-3 py-3 text-neutral-600">{humanizeText(String(item.articleNo ?? '未记录'))}</td><td className="whitespace-nowrap px-3 py-3 text-neutral-600">{humanizeText(String(item.category ?? '未分类'))}</td><td className="whitespace-nowrap px-3 py-3 text-neutral-500">{typeof item.updatedAt === 'string' ? formatTime(item.updatedAt) : '未记录'}</td></tr>)}
+            </tbody>
+          </table>
+        </div>
+      ) : <p className="mt-3 text-[13px] text-neutral-400">本次查询没有匹配的法规制度。</p>}
+    </section>
+  )
+}
+
+function AgentResultView({ run }: { run: AgentRun }) {
+  const outputs = run.steps
+    .filter((step) => step.kind === 'tool' && step.status === 'succeeded')
+    .map((step) => ({ name: step.name, data: asDataRecord(step.output) }))
+    .filter((output): output is { name: string; data: DataRecord } => Boolean(output.data))
+  const metrics = outputs.filter((output) => output.name === 'aggregate_safety_metrics')
+  const issues = outputs.filter((output) => output.name === 'search_issues' || output.name === 'get_issue')
+  const regulations = outputs.filter((output) => output.name === 'search_regulations')
+  const hasData = metrics.length + issues.length + regulations.length > 0
+
+  return (
+    <div id="agent-conclusion" role="region" aria-label="最终分析结论">
+      <div className="flex flex-wrap items-center gap-2.5 border-b border-neutral-200 pb-4">
+        <CheckCircle2 size={20} className={run.status === 'succeeded' ? 'text-[#248A3D]' : 'text-neutral-400'} />
+        <h3 className="text-[17px] font-semibold text-neutral-900">分析结论</h3>
+        <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${RUN_STATUS[run.status].className}`}>{RUN_STATUS[run.status].label}</span>
+      </div>
+
+      {run.error && <div role="alert" className="mt-5 rounded-xl bg-[#FF3B30]/10 px-4 py-3 text-[13px] leading-6 text-[#D70015]">{humanizeText(run.error)}</div>}
+      {run.answer ? <FormattedAnswer answer={run.answer} /> : (
+        <p className="mt-5 text-[14px] leading-7 text-neutral-400">{run.status === 'running' ? '正在分析，结论尚未形成；下方数据会随工具完成逐步补充。' : '本次运行没有形成结论。'}</p>
+      )}
+      {run.status === 'succeeded' && <p className="mt-4 text-[12px] leading-6 text-[#248A3D]">结论已通过系统核验，图表和表格均来自本次只读查询结果。</p>}
+      {run.status === 'waiting_human' && <p className="mt-4 text-[12px] leading-6 text-[#8A4700]">以下内容仅供复核，不作为系统结论。</p>}
+
+      {metrics.map((output, index) => <MetricResult key={`${index}-${output.data.generatedAt ?? ''}`} data={output.data} index={index} />)}
+      {issues.map((output, index) => <IssueResultTable key={`issue-${index}`} data={output.data} index={index} />)}
+      {regulations.map((output, index) => <RegulationResultTable key={`regulation-${index}`} data={output.data} index={index} />)}
+      {!run.answer && !hasData && run.status !== 'running' && <p className="mt-5 text-[13px] text-neutral-400">没有可用于生成图表或表格的查询数据，可点击左侧节点查看失败原因。</p>}
+      {hasData && <p className="mt-6 border-t border-neutral-100 pt-4 text-[11px] leading-5 text-neutral-400">数据仅反映本次查询时的系统记录；完整输入参数和原始返回内容可在对应工具节点中查看。</p>}
+    </div>
+  )
+}
+
 interface AgentProps {
   embedded?: boolean
   draftRequest?: { question: string; id: number }
@@ -361,6 +576,7 @@ export default function Agent({ embedded = false, draftRequest }: AgentProps) {
   const [run, setRun] = useState<AgentRun | null>(null)
   const [detailCollapsed, setDetailCollapsed] = useState(false)
   const [selectedStepId, setSelectedStepId] = useState('')
+  const [flowOpen, setFlowOpen] = useState(false)
   const [error, setError] = useState('')
   const [runError, setRunError] = useState('')
   const [history, setHistory] = useState<AgentRunList | null>(null)
@@ -370,8 +586,28 @@ export default function Agent({ embedded = false, draftRequest }: AgentProps) {
   const [historyLoadingId, setHistoryLoadingId] = useState('')
   const submittingRef = useRef(false)
   const cancellingRef = useRef(false)
+  const flowTriggerRef = useRef<HTMLButtonElement>(null)
   const runId = run?.id
   const runStatus = run?.status
+
+  const closeFlow = useCallback(() => {
+    setFlowOpen(false)
+    window.setTimeout(() => flowTriggerRef.current?.focus(), 0)
+  }, [])
+
+  useEffect(() => {
+    if (!flowOpen) return
+    const previousOverflow = document.body.style.overflow
+    const handleEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') closeFlow()
+    }
+    document.body.style.overflow = 'hidden'
+    document.addEventListener('keydown', handleEscape)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [closeFlow, flowOpen])
 
   const loadHistory = useCallback(async (page: number, quiet = false) => {
     if (!quiet) setHistoryLoading(true)
@@ -464,6 +700,7 @@ export default function Agent({ embedded = false, draftRequest }: AgentProps) {
         body: JSON.stringify({ question: trimmedQuestion }),
       })
       setRun(result)
+      setFlowOpen(true)
     } catch (submitError) {
       setError(errorMessage(submitError, '分析请求失败，请稍后重试'))
     } finally {
@@ -651,8 +888,9 @@ export default function Agent({ embedded = false, draftRequest }: AgentProps) {
         </div>
       )}
 
-      {run && !detailCollapsed && (
+      {run && (
         <>
+          {!detailCollapsed && (
           <section id="agent-run-detail" className="scroll-mt-4 rounded-2xl border border-neutral-100 bg-white p-5 shadow-sm sm:p-6" aria-live="polite" aria-labelledby="agent-result-title">
             <div className="flex flex-wrap items-center gap-3">
               <div className="flex min-w-0 items-center gap-2">
@@ -720,125 +958,206 @@ export default function Agent({ embedded = false, draftRequest }: AgentProps) {
               <div><dt className="text-neutral-400">执行进度</dt><dd className="mt-1 text-neutral-700">{steps.length} 个节点</dd></div>
             </dl>
           </section>
+          )}
 
-          <section className="rounded-2xl border border-neutral-100 bg-white p-5 shadow-sm sm:p-6" aria-labelledby="agent-steps-title">
-            <div className="border-b border-neutral-100 pb-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 id="agent-steps-title" className="text-[16px] font-semibold text-neutral-900">执行流程</h2>
-                <span className="text-[12px] text-neutral-400">已完成 {steps.length} 个节点{running ? '，下一节点执行中' : ''}</span>
+          <section className="rounded-2xl border border-neutral-100 bg-white px-4 py-4 shadow-sm sm:px-5" aria-labelledby="agent-steps-title">
+            <div className="flex items-center gap-3">
+              <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${running ? 'bg-[#007AFF]/10 text-[#007AFF]' : 'bg-neutral-100 text-neutral-500'}`}>
+                {running ? <Loader2 size={18} className="animate-spin" /> : <History size={18} />}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 id="agent-steps-title" className="text-[15px] font-semibold text-neutral-900">执行流程</h2>
+                  <span className="text-[12px] text-neutral-400">已完成 {steps.length} 个节点</span>
+                </div>
+                <p className="mt-1 truncate text-[12px] text-neutral-500" title={running ? `正在执行：${runningStepName}` : '点击查看每个节点的输入、结果和验证依据'}>
+                  {running ? `正在执行：${runningStepName}` : steps.length ? '点击查看每个节点的输入、结果和验证依据' : '本次运行没有步骤记录'}
+                </p>
               </div>
-              {steps.length > 0 && <p className="mt-1.5 text-[12px] leading-5 text-neutral-500">节点完成后会立即显示。点击节点展开详情，再次点击即可收回。</p>}
+              <button
+                ref={flowTriggerRef}
+                type="button"
+                onClick={() => setFlowOpen(true)}
+                className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl border border-neutral-200 px-3.5 text-[13px] font-medium text-neutral-700 transition-colors hover:border-[#007AFF]/30 hover:bg-[#007AFF]/5 hover:text-[#007AFF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]/30"
+              >
+                {running ? '实时流程' : '查看流程'}<ChevronRight size={15} />
+              </button>
             </div>
-            {steps.length > 0 || running ? (
-              <>
-                <ol aria-label="智能助手执行节点" aria-live="polite" aria-relevant="additions" className="mt-6 grid gap-4 md:grid-flow-col md:auto-cols-fr md:gap-0">
-                  {steps.map((step, index) => {
-                    const selected = selectedStep?.id === step.id
-                    const succeeded = step.status === 'succeeded'
-                    return (
-                      <li
-                        key={step.id}
-                        className={`relative motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-300 ${index > 0 ? "before:absolute before:bottom-1/2 before:left-[21px] before:h-full before:w-px before:bg-neutral-200 before:content-[''] md:before:bottom-auto md:before:left-auto md:before:right-1/2 md:before:top-[22px] md:before:h-px md:before:w-full" : ''}`}
-                      >
-                        <button
-                          id={`agent-step-${step.id}`}
-                          type="button"
-                          data-step-seq={step.seq}
-                          aria-expanded={selected}
-                          aria-controls={selected ? 'agent-step-detail' : undefined}
-                          aria-label={`步骤 ${step.seq}：${stepDisplayName(step)}，${succeeded ? '成功' : '失败'}，耗时 ${formatDuration(step.durationMs)}。${selected ? '再次点击收回详情' : '点击查看详情'}`}
-                          onClick={() => toggleStep(step.id)}
-                          onKeyDown={(event) => moveStepSelection(event, index)}
-                          className="group relative z-10 flex min-h-11 w-full cursor-pointer items-center gap-3 rounded-lg text-left outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-[#007AFF]/40 focus-visible:ring-offset-4 md:flex-col md:gap-2 md:text-center"
-                        >
-                          <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full border-2 text-[14px] font-semibold tabular-nums transition-[color,background-color,border-color,box-shadow] duration-150 md:mx-auto ${selected ? 'border-[#007AFF] bg-[#007AFF] text-white ring-4 ring-[#007AFF]/10' : succeeded ? 'border-[#007AFF] bg-white text-[#007AFF] group-hover:bg-[#007AFF]/5' : 'border-[#FF3B30] bg-[#FF3B30]/5 text-[#D70015]'}`}>
-                            {selected ? <ChevronUp size={18} aria-hidden="true" /> : step.seq}
-                          </span>
-                          <span className="min-w-0 flex-1 md:flex-none">
-                            <span className={`block break-words text-[12px] font-medium leading-5 ${selected ? 'text-[#007AFF]' : 'text-neutral-800'}`}>{stepDisplayName(step)}</span>
-                            <span className={`mt-0.5 flex items-center gap-1 text-[11px] tabular-nums md:justify-center ${succeeded ? 'text-[#248A3D]' : 'text-[#D70015]'}`}>
-                              <span className={`h-1.5 w-1.5 rounded-full ${succeeded ? 'bg-[#34C759]' : 'bg-[#FF3B30]'}`} />
-                              {succeeded ? '成功' : '失败'}
-                              <span className="text-neutral-400">· {formatDuration(step.durationMs)}</span>
-                            </span>
-                            {selected && <span className="mt-1 block text-[11px] font-medium text-[#007AFF]">再次点击收回</span>}
-                          </span>
-                        </button>
-                      </li>
-                    )
-                  })}
-                  {running && (
-                    <li role="status" aria-label={`正在执行：${runningStepName}`} className={`relative ${steps.length > 0 ? "before:absolute before:bottom-1/2 before:left-[21px] before:h-full before:w-px before:bg-neutral-200 before:content-[''] md:before:bottom-auto md:before:left-auto md:before:right-1/2 md:before:top-[22px] md:before:h-px md:before:w-full" : ''}`}>
-                      <div className="relative z-10 flex min-h-11 w-full items-center gap-3 rounded-lg text-left md:flex-col md:gap-2 md:text-center">
-                        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border-2 border-[#007AFF]/40 bg-[#007AFF]/5 text-[#007AFF] md:mx-auto">
-                          <Loader2 size={19} className="animate-spin" aria-hidden="true" />
-                        </span>
-                        <span className="min-w-0 flex-1 md:flex-none">
-                          <span className="block break-words text-[12px] font-medium leading-5 text-[#007AFF]">{runningStepName}</span>
-                          <span className="mt-0.5 flex items-center gap-1 text-[11px] text-neutral-400 md:justify-center">
-                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#007AFF]" /> 正在执行
-                          </span>
-                        </span>
-                      </div>
-                    </li>
-                  )}
-                </ol>
-
-                {selectedStep && (
-                  <div id="agent-step-detail" key={selectedStep.id} data-step-id={selectedStep.id} className="mt-6 border-t border-neutral-200 pt-5" role="region" aria-label={`第 ${selectedStep.seq} 步详细执行情况`}>
-                    {(() => {
-                      const kind = STEP_KIND[selectedStep.kind]
-                      const KindIcon = kind.icon
-                      const inputLabel = selectedStep.kind === 'tool' ? '工具输入参数' : selectedStep.kind === 'model' ? '模型调用信息' : '验证输入信息'
-                      const outputLabel = selectedStep.kind === 'tool' ? '工具返回内容' : selectedStep.kind === 'model' ? '模型返回内容' : '验证结果详情'
-                      return (
-                        <>
-                          <div className="flex flex-wrap items-center gap-2.5">
-                            <span className="flex h-8 w-8 items-center justify-center rounded-full border border-[#007AFF] text-[12px] font-semibold tabular-nums text-[#007AFF]">{selectedStep.seq}</span>
-                            <span className={`inline-flex items-center gap-1.5 text-[12px] font-medium ${kind.className} bg-transparent px-0`}>
-                              <KindIcon size={14} /> {kind.label}
-                            </span>
-                            <h3 className="min-w-0 break-words text-[15px] font-semibold text-neutral-900">{stepDisplayName(selectedStep)}</h3>
-                            <button
-                              type="button"
-                              onClick={() => setSelectedStepId('')}
-                              className="ml-auto inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-neutral-200 px-3 text-[12px] font-medium text-neutral-600 transition-colors hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]/30"
-                            >
-                              <ChevronUp size={14} /> 收起节点详情
-                            </button>
-                          </div>
-
-                          <p className="mt-4 rounded-xl bg-[#F5F6F2] px-4 py-3 text-[14px] leading-7 text-neutral-800">{stepSummary(selectedStep)}</p>
-                          <dl className="mt-4 grid gap-3 border-b border-neutral-100 pb-4 text-[12px] sm:grid-cols-3">
-                            <div><dt className="text-neutral-400">执行状态</dt><dd className={`mt-1 font-medium ${selectedStep.status === 'succeeded' ? 'text-[#248A3D]' : 'text-[#D70015]'}`}>{selectedStep.status === 'succeeded' ? '执行成功' : '执行失败'}</dd></div>
-                            <div><dt className="text-neutral-400">执行耗时</dt><dd className="mt-1 tabular-nums text-neutral-700">{formatDuration(selectedStep.durationMs)}</dd></div>
-                            <div><dt className="text-neutral-400">执行时间</dt><dd className="mt-1 text-neutral-700">{formatTime(selectedStep.createdAt)}</dd></div>
-                          </dl>
-
-                          <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                            <details className="group min-w-0 rounded-xl bg-[#F5F6F2] px-4">
-                              <summary className="flex min-h-12 cursor-pointer select-none list-none items-center gap-2 text-[13px] font-medium text-neutral-700 outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]/40">
-                                {inputLabel}<ChevronDown size={14} className="ml-auto text-neutral-400 transition-transform duration-150 group-open:rotate-180" />
-                              </summary>
-                              <div className="max-h-80 overflow-auto border-t border-neutral-200 py-3 text-[13px] leading-6"><TraceValueView value={translateTraceValue(selectedStep.input)} /></div>
-                            </details>
-                            <details open className="group min-w-0 rounded-xl bg-[#F5F6F2] px-4">
-                              <summary className="flex min-h-12 cursor-pointer select-none list-none items-center gap-2 text-[13px] font-medium text-neutral-700 outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]/40">
-                                {outputLabel}<ChevronDown size={14} className="ml-auto text-neutral-400 transition-transform duration-150 group-open:rotate-180" />
-                              </summary>
-                              <div className="max-h-80 overflow-auto border-t border-neutral-200 py-3 text-[13px] leading-6"><TraceValueView value={translateTraceValue(selectedStep.output)} /></div>
-                            </details>
-                          </div>
-                        </>
-                      )
-                    })()}
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="px-5 py-6 text-center text-[13px] text-neutral-400">本次运行没有返回步骤记录。</div>
-            )}
           </section>
+
+          {flowOpen && (
+            <div
+              className="fixed inset-0 z-[70] flex items-end justify-center bg-neutral-950/35 sm:items-center sm:p-6"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="agent-flow-dialog-title"
+              onMouseDown={(event) => { if (event.target === event.currentTarget) closeFlow() }}
+            >
+              <div className="flex h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:h-[86vh] sm:rounded-3xl">
+                <header className="shrink-0 border-b border-neutral-200 px-5 py-4 sm:px-6">
+                  <div className="flex items-center gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2.5">
+                        <h2 id="agent-flow-dialog-title" className="text-[18px] font-semibold text-neutral-900">执行流程</h2>
+                        <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${RUN_STATUS[run.status].className}`}>{RUN_STATUS[run.status].label}</span>
+                        <span className="text-[12px] text-neutral-400">已完成 {steps.length} 个节点</span>
+                      </div>
+                      <p className="mt-1.5 line-clamp-2 break-words text-[12px] leading-5 text-neutral-500">{run.question}</p>
+                    </div>
+                    <button
+                      type="button"
+                      autoFocus
+                      onClick={closeFlow}
+                      aria-label="关闭执行流程"
+                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]/30"
+                    >
+                      <X size={20} />
+                    </button>
+                  </div>
+                </header>
+
+                <div className="grid min-h-0 flex-1 grid-rows-[minmax(180px,0.8fr)_minmax(0,1.2fr)] lg:grid-cols-[290px_minmax(0,1fr)] lg:grid-rows-1">
+                  <aside className="min-h-0 overflow-y-auto border-b border-neutral-200 bg-neutral-50/60 lg:border-b-0 lg:border-r" aria-label="结论与执行节点">
+                    <div className="border-b border-neutral-200 p-4 pb-3 sm:px-5">
+                      <button
+                        type="button"
+                        aria-pressed={!selectedStep}
+                        aria-controls="agent-conclusion"
+                        onClick={() => setSelectedStepId('')}
+                        className={`flex min-h-14 w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[#007AFF]/40 ${!selectedStep ? 'border-[#007AFF]/25 bg-white shadow-sm' : 'border-transparent hover:bg-white'}`}
+                      >
+                        <BarChart3 size={19} className={!selectedStep ? 'shrink-0 text-[#007AFF]' : 'shrink-0 text-neutral-400'} />
+                        <span className="min-w-0 flex-1">
+                          <span className={`block text-[13px] font-semibold ${!selectedStep ? 'text-[#007AFF]' : 'text-neutral-700'}`}>分析结论</span>
+                          <span className="mt-0.5 block text-[11px] text-neutral-400">{running ? '随查询进度实时更新' : '回答、图表与数据明细'}</span>
+                        </span>
+                        <ChevronRight size={14} className={!selectedStep ? 'text-[#007AFF]' : 'text-neutral-300'} />
+                      </button>
+                      <div className="mb-1 mt-4 px-2 text-[11px] font-medium text-neutral-400">执行过程</div>
+                    </div>
+                    <ol aria-label="智能助手执行节点" aria-live="polite" aria-relevant="additions" className="p-4 pt-1 sm:px-5">
+                      {steps.map((step, index) => {
+                        const selected = selectedStep?.id === step.id
+                        const succeeded = step.status === 'succeeded'
+                        return (
+                          <li
+                            key={step.id}
+                            className={`relative pb-3 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-300 ${index < steps.length - 1 || running ? "before:absolute before:bottom-0 before:left-[17px] before:top-9 before:w-px before:bg-neutral-200 before:content-['']" : ''}`}
+                          >
+                            <button
+                              id={`agent-step-${step.id}`}
+                              type="button"
+                              data-step-seq={step.seq}
+                              aria-expanded={selected}
+                              aria-controls={selected ? 'agent-step-detail' : undefined}
+                              aria-label={`步骤 ${step.seq}：${stepDisplayName(step)}，${succeeded ? '成功' : '失败'}，耗时 ${formatDuration(step.durationMs)}。${selected ? '再次点击收回详情' : '点击查看详情'}`}
+                              onClick={() => toggleStep(step.id)}
+                              onKeyDown={(event) => moveStepSelection(event, index)}
+                              className={`group relative z-10 flex min-h-14 w-full items-center gap-3 rounded-xl p-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[#007AFF]/40 ${selected ? 'bg-[#007AFF]/10' : 'hover:bg-white'}`}
+                            >
+                              <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-2 bg-white text-[13px] font-semibold tabular-nums ${selected ? 'border-[#007AFF] bg-[#007AFF] text-white' : succeeded ? 'border-[#007AFF] text-[#007AFF]' : 'border-[#FF3B30] text-[#D70015]'}`}>
+                                {selected ? <ChevronUp size={17} /> : step.seq}
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className={`block break-words text-[13px] font-medium leading-5 ${selected ? 'text-[#007AFF]' : 'text-neutral-800'}`}>{stepDisplayName(step)}</span>
+                                <span className={`mt-1 flex items-center gap-1.5 text-[11px] tabular-nums ${succeeded ? 'text-[#248A3D]' : 'text-[#D70015]'}`}>
+                                  <span className={`h-1.5 w-1.5 rounded-full ${succeeded ? 'bg-[#34C759]' : 'bg-[#FF3B30]'}`} />
+                                  {succeeded ? '成功' : '失败'}<span className="text-neutral-400">· {formatDuration(step.durationMs)}</span>
+                                </span>
+                              </span>
+                              <ChevronRight size={14} className={`shrink-0 transition-transform ${selected ? 'rotate-90 text-[#007AFF]' : 'text-neutral-300 group-hover:text-neutral-500'}`} />
+                            </button>
+                          </li>
+                        )
+                      })}
+                      {running && (
+                        <li role="status" aria-label={`正在执行：${runningStepName}`} className={`relative ${steps.length ? "before:absolute before:bottom-0 before:left-[17px] before:top-9 before:w-px before:bg-neutral-200 before:content-['']" : ''}`}>
+                          <div className="relative z-10 flex min-h-14 items-center gap-3 rounded-xl p-2">
+                            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-2 border-[#007AFF]/40 bg-white text-[#007AFF]">
+                              <Loader2 size={17} className="animate-spin" />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block text-[13px] font-medium leading-5 text-[#007AFF]">{runningStepName}</span>
+                              <span className="mt-1 flex items-center gap-1.5 text-[11px] text-neutral-400"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#007AFF]" />正在执行</span>
+                            </span>
+                          </div>
+                        </li>
+                      )}
+                      {!running && !steps.length && <li className="px-3 py-8 text-center text-[13px] text-neutral-400">本次运行没有返回步骤记录。</li>}
+                    </ol>
+                  </aside>
+
+                  <div className="min-h-0 overflow-y-auto p-5 sm:p-6">
+                    {selectedStep ? (
+                      <div id="agent-step-detail" key={selectedStep.id} data-step-id={selectedStep.id} role="region" aria-label={`第 ${selectedStep.seq} 步详细执行情况`}>
+                        {(() => {
+                          const kind = STEP_KIND[selectedStep.kind]
+                          const KindIcon = kind.icon
+                          const inputLabel = selectedStep.kind === 'tool' ? '工具输入参数' : selectedStep.kind === 'model' ? '模型调用信息' : '验证输入信息'
+                          const outputLabel = selectedStep.kind === 'tool' ? '工具返回内容' : selectedStep.kind === 'model' ? '模型返回内容' : '验证结果详情'
+                          return (
+                            <>
+                              <div className="flex flex-wrap items-center gap-2.5 border-b border-neutral-200 pb-4">
+                                <span className="flex h-8 w-8 items-center justify-center rounded-full border border-[#007AFF] text-[12px] font-semibold tabular-nums text-[#007AFF]">{selectedStep.seq}</span>
+                                <span className={`inline-flex items-center gap-1.5 text-[12px] font-medium ${kind.className} bg-transparent px-0`}><KindIcon size={14} />{kind.label}</span>
+                                <h3 className="min-w-0 break-words text-[16px] font-semibold text-neutral-900">{stepDisplayName(selectedStep)}</h3>
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedStepId('')}
+                                  className="ml-auto inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2 text-[12px] font-medium text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]/30"
+                                >
+                                  <ChevronUp size={14} />收起详情
+                                </button>
+                              </div>
+
+                              <p className="mt-5 text-[14px] leading-7 text-neutral-800">{stepSummary(selectedStep)}</p>
+                              <dl className="mt-5 grid gap-3 border-y border-neutral-100 py-4 text-[12px] sm:grid-cols-3">
+                                <div><dt className="text-neutral-400">执行状态</dt><dd className={`mt-1 font-medium ${selectedStep.status === 'succeeded' ? 'text-[#248A3D]' : 'text-[#D70015]'}`}>{selectedStep.status === 'succeeded' ? '执行成功' : '执行失败'}</dd></div>
+                                <div><dt className="text-neutral-400">执行耗时</dt><dd className="mt-1 tabular-nums text-neutral-700">{formatDuration(selectedStep.durationMs)}</dd></div>
+                                <div><dt className="text-neutral-400">执行时间</dt><dd className="mt-1 text-neutral-700">{formatTime(selectedStep.createdAt)}</dd></div>
+                              </dl>
+
+                              <div className="mt-5 space-y-4">
+                                <details className="group min-w-0 border-b border-neutral-100 pb-4">
+                                  <summary className="flex min-h-11 cursor-pointer select-none list-none items-center gap-2 text-[13px] font-medium text-neutral-700 outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]/40">
+                                    {inputLabel}<ChevronDown size={14} className="ml-auto text-neutral-400 transition-transform duration-150 group-open:rotate-180" />
+                                  </summary>
+                                  <div className="max-h-80 overflow-auto py-3 text-[13px] leading-6"><TraceValueView value={translateTraceValue(selectedStep.input)} /></div>
+                                </details>
+                                <details open className="group min-w-0">
+                                  <summary className="flex min-h-11 cursor-pointer select-none list-none items-center gap-2 text-[13px] font-medium text-neutral-700 outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]/40">
+                                    {outputLabel}<ChevronDown size={14} className="ml-auto text-neutral-400 transition-transform duration-150 group-open:rotate-180" />
+                                  </summary>
+                                  <div className="max-h-80 overflow-auto py-3 text-[13px] leading-6"><TraceValueView value={translateTraceValue(selectedStep.output)} /></div>
+                                </details>
+                              </div>
+                            </>
+                          )
+                        })()}
+                      </div>
+                    ) : (
+                      <AgentResultView run={run} />
+                    )}
+                  </div>
+                </div>
+
+                <footer className="flex shrink-0 flex-wrap items-center gap-3 border-t border-neutral-200 px-5 py-3 sm:px-6">
+                  <p className="min-w-0 flex-1 text-[12px] leading-5 text-neutral-400">节点完成后自动追加，关闭弹窗不会中断分析。</p>
+                  {running && (
+                    <button
+                      type="button"
+                      onClick={cancelRun}
+                      disabled={cancelling}
+                      className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-neutral-200 px-3 text-[12px] font-medium text-neutral-600 transition-colors hover:border-[#FF3B30]/30 hover:bg-[#FF3B30]/5 hover:text-[#D70015] disabled:opacity-50"
+                    >
+                      {cancelling ? <Loader2 size={13} className="animate-spin" /> : <Square size={12} />}{cancelling ? '取消中…' : '取消运行'}
+                    </button>
+                  )}
+                  <button type="button" onClick={closeFlow} className="inline-flex min-h-10 items-center rounded-lg bg-neutral-900 px-4 text-[12px] font-medium text-white transition-colors hover:bg-neutral-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400">关闭</button>
+                </footer>
+              </div>
+            </div>
+          )}
         </>
       )}
 
